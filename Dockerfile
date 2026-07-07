@@ -8,7 +8,7 @@ RUN pip install --no-cache-dir runpod requests torchaudio
 
 RUN pip install --no-cache-dir cosyvoice2-eu
 
-RUN pip install --no-cache-dir --force-reinstall torch==2.3.0 torchvision==0.18.0 torchaudio==2.3.0 --index-url https://download.pytorch.org/whl/cu121
+RUN pip install --no-cache-dir --force-reinstall torch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu121
 
 RUN pip install --no-cache-dir numpy==1.26.4
 COPY worker_runpod.py /content/worker_runpod.py
