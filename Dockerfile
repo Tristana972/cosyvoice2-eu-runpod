@@ -10,7 +10,10 @@ RUN pip install --no-cache-dir cosyvoice2-eu
 
 RUN pip install --no-cache-dir --force-reinstall torch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu121
 
-RUN pip install --no-cache-dir numpy==1.26.4
+RUN pip install --no-cache-dir numpy==1.26.4 Pillow
+
 COPY worker_runpod.py /content/worker_runpod.py
+COPY viseme.py /content/viseme.py
+COPY assets/ /content/assets/
 
 CMD ["python3", "-u", "worker_runpod.py"]
