@@ -1,11 +1,15 @@
 import os
 import base64
 import tempfile
+import shutil
 import requests
 import runpod
 import torchaudio
 
+import viseme
+
 _cosy = None
+
 
 def get_model():
     global _cosy
@@ -25,20 +29,35 @@ def download_file(url, suffix):
 
 
 def generate(job):
+    prompt_path = None
+    frames_dir = None
     try:
         values = job["input"]
         text = values["text"]
         prompt_audio_url = values["prompt_audio_url"]
+        character = values.get("character")
 
         prompt_path = download_file(prompt_audio_url, ".wav")
 
         cosy = get_model()
         wav, sr = cosy.tts(text=text, prompt=prompt_path)
 
-        out_path = "/content/out.wav"
-        torchaudio.save(out_path, wav, sr)
+        out_audio_path = "/content/out.wav"
+        torchaudio.save(out_audio_path, wav, sr)
 
-        with open(out_path, "rb") as f:
+        if character:
+            character = character.strip().lower()
+            frames_dir = tempfile.mkdtemp(prefix="viseme_frames_")
+            out_video_path = "/content/out.mp4"
+
+            viseme.animate(out_audio_path, character, out_video_path, frames_dir)
+
+            with open(out_video_path, "rb") as f:
+                video_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+            return {"status": "DONE", "video_base64": video_b64, "character": character}
+
+        with open(out_audio_path, "rb") as f:
             audio_b64 = base64.b64encode(f.read()).decode("utf-8")
 
         return {"status": "DONE", "audio_base64": audio_b64, "sample_rate": sr}
@@ -47,8 +66,13 @@ def generate(job):
         return {"status": "FAILED", "error": str(e), "traceback": traceback.format_exc()}
     finally:
         try:
-            if os.path.exists(prompt_path):
+            if prompt_path and os.path.exists(prompt_path):
                 os.remove(prompt_path)
+        except Exception:
+            pass
+        try:
+            if frames_dir and os.path.exists(frames_dir):
+                shutil.rmtree(frames_dir)
         except Exception:
             pass
 
