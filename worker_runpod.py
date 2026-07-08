@@ -33,13 +33,44 @@ def generate(job):
     frames_dir = None
     try:
         values = job["input"]
-        text = values["text"]
+        mode = values.get("mode")
         prompt_audio_url = values["prompt_audio_url"]
-        character = values.get("character")
 
         prompt_path = download_file(prompt_audio_url, ".wav")
-
         cosy = get_model()
+
+        if mode == "duo":
+            # Two characters (Zuzu/Titu) taking turns in the same frame,
+            # over an AI-generated background.
+            turns_in = values["turns"]
+            background_b64 = values["background_base64"]
+
+            frames_dir = tempfile.mkdtemp(prefix="viseme_duo_frames_")
+
+            background_path = os.path.join(frames_dir, "background.png")
+            with open(background_path, "wb") as f:
+                f.write(base64.b64decode(background_b64))
+
+            turns = []
+            for i, t in enumerate(turns_in):
+                character = t["character"].strip().lower()
+                turn_text = t["text"]
+                wav, sr = cosy.tts(text=turn_text, prompt=prompt_path)
+                turn_audio_path = os.path.join(frames_dir, "turn_%02d.wav" % i)
+                torchaudio.save(turn_audio_path, wav, sr)
+                turns.append({"character": character, "audio_path": turn_audio_path})
+
+            out_video_path = "/content/out.mp4"
+            viseme.animate_duo(turns, background_path, out_video_path, frames_dir)
+
+            with open(out_video_path, "rb") as f:
+                video_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+            return {"status": "DONE", "video_base64": video_b64, "mode": "duo"}
+
+        text = values["text"]
+        character = values.get("character")
+
         wav, sr = cosy.tts(text=text, prompt=prompt_path)
 
         out_audio_path = "/content/out.wav"
