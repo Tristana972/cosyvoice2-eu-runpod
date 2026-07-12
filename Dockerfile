@@ -12,6 +12,8 @@ RUN pip install --no-cache-dir --force-reinstall torch==2.4.0 torchvision==0.19.
 
 RUN pip install --no-cache-dir numpy==1.26.4 Pillow
 
+RUN pip install --no-cache-dir opencv-python-headless
+
 COPY worker_runpod.py /content/worker_runpod.py
 COPY viseme.py /content/viseme.py
 COPY assets/ /content/assets/
