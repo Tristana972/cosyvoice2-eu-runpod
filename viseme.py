@@ -11,26 +11,49 @@ Also supports a "duo" mode: two characters visible together in the same
 frame over an AI-generated background, taking turns speaking (side by side,
 full body), for the same-frame Zuzu/Titu interaction feature.
 
-Changes in this revision:
-- Idle motion is now a mesh warp, not a rigid whole-image rotate/translate.
-  A single flat image can only be rotated/translated as ONE stiff block --
-  that's why the first version of this file "floated" instead of feeling
-  alive (arms/tail can't move independently from the torso if there's
-  nothing separating them). A hand-rigged, per-limb-layer puppet would fix
-  that but only for characters someone manually re-cuts into layers -- it
-  can't generalize to a photo a user uploads in the app. A mesh warp
-  instead displaces a grid of points across the *same* flat cutout, with
-  displacement amplitude growing away from the feet (like a reed rooted at
-  the ground, swaying more at the head/antenna/arm tips than at the base).
-  That gives visually independent-looking limb/extremity motion without
-  any manual layer separation, so it works automatically on ANY full-body
-  cutout -- Zuzu, Titu, or a future avatar generated from a user's photo.
-- Duo mode no longer crops characters into a circular "video call" bubble
-  (which only showed the bust). It now composites full-body cutouts
-  (transparent PNGs, background removed from the original art) standing
-  side by side on the generated background, with a soft contact shadow and
-  a non-circular "speaking" highlight (soft colour glow + slight scale-up)
-  instead of a ring.
+Round 1:
+- Duo mode composites full-body cutouts (transparent PNGs, background
+  removed from the original art) standing side by side on the generated
+  background, with a soft contact shadow and a non-circular "speaking"
+  highlight (soft colour glow + slight scale-up) instead of the old
+  circular "video call" bubble crop.
+
+Round 2 (per feedback "ca flotte, les bras ne bougent pas, la queue ne
+frétille pas" on a rigid whole-image rotate/translate):
+- Tried a mesh warp (grid of points displaced with amplitude growing away
+  from the feet). Amplified further on a second pass. Still read as the
+  whole image undulating/melting rather than a character actually moving
+  -- because it fundamentally is a single flat image being deformed, not
+  distinct parts moving.
+
+Round 3 (per feedback "ca module toujours, c'est pas realiste, c'est pas
+anime, le but c'est de l'animer comme s'il etait vivant" -- the mesh warp
+approach was abandoned):
+- Replaced the whole-image warp with an actual 2-part rig: the torso stays
+  essentially still (only a small idle weight-shift bob, a plain
+  translate, no deformation), and the one limb each character visibly has
+  (Zuzu's raised arm, Titu's tail) is cut out as its own layer and
+  *rotated* around its real attachment point (shoulder / tail base) with
+  a slow wave plus a faster small "flick" on top -- so the arm genuinely
+  waves and the tail genuinely wags, instead of the whole silhouette
+  rippling. The cut is a plain rectangular crop around the limb (not a
+  hand-traced silhouette): the same rectangle is erased (to transparent)
+  from the torso and re-drawn each frame rotated about a pivot that sits
+  near one corner of that rectangle, so at rest (angle 0) it's pixel
+  -identical to the original artwork, and at speed the near-pivot pixels
+  barely move while the far tip sweeps a visible arc. This works on any
+  full-body cutout given a manually-picked box+pivot per character --
+  it's not fully automatic like the old mesh warp was, but it's what
+  actually reads as "alive" instead of "floating/melting", which is what
+  matters here.
+- Solo mode used to reuse the flat baked-background art (CHARACTER_IMAGES)
+  and warp the whole frame including that background. Since the rig now
+  needs to erase-and-redraw just the limb, solo mode switched to the same
+  transparent-cutout-over-a-background-plate compositing duo mode already
+  used, with a simple synthetic background plate (a 2-stop vertical
+  gradient + a flat grass band, colour-sampled from the original baked
+  art) generated once per character so there's something clean to reveal
+  behind the erased limb.
 """
 import wave
 import os
@@ -45,8 +68,10 @@ OPEN_THRESH = 0.45
 
 ASSETS_DIR = "/content/assets"
 
-# Original full-frame mouth-swap images (own baked-in background), used as-is
-# for solo (single character) videos.
+# Original full-frame mouth-swap images (own baked-in background). Only
+# used now as the colour source for the synthetic solo background plate
+# (see _solo_background) -- actual solo rendering composites the
+# transparent CUTOUT_IMAGES over that plate, same as duo mode.
 CHARACTER_IMAGES = {
     "zuzu": {
         "closed": os.path.join(ASSETS_DIR, "zuzu_mouth_closed.png"),
@@ -60,9 +85,9 @@ CHARACTER_IMAGES = {
     },
 }
 
-# Background-removed (transparent) full-body cutouts of the same 6 images,
-# used for duo mode so characters can be composited onto a different
-# generated background without a circular mask.
+# Background-removed (transparent) full-body cutouts of the same 6 images.
+# This is the actual source used to render both solo and duo now, since
+# the limb rig needs real alpha to erase/redraw the arm or tail.
 CUTOUT_IMAGES = {
     "zuzu": {
         "closed": os.path.join(ASSETS_DIR, "zuzu_mouth_closed_cutout.png"),
@@ -77,18 +102,74 @@ CUTOUT_IMAGES = {
 }
 
 # --- Idle body motion (applied every frame, solo + duo) ---------------------
-# Mesh-warp "reed" motion: displacement grows away from the feet (anchor),
-# so the head/antenna/arm tips sway noticeably more than the torso base --
-# reads as limbs moving independently even though it's a single flat cutout.
-IDLE_ZOOM = 1.28          # solo mode: render margin so the warp never samples outside the image
-IDLE_PAD_FRAC = 0.25      # duo mode: transparent margin fraction, same purpose
-MESH_COLS = 6
-MESH_ROWS = 10
-IDLE_WOBBLE_AMP_X = 0.05   # horizontal sway at the tip, fraction of width
-IDLE_WOBBLE_AMP_Y = 0.032  # vertical sway at the tip, fraction of height
-IDLE_WOBBLE_T1 = 1.7
-IDLE_WOBBLE_T2 = 2.3
-IDLE_WOBBLE_T3 = 2.9
+# Whole-body idle motion: a small, plain translate (weight-shift bob), NOT a
+# deformation -- the torso should read as solid/still, so the limb rig below
+# is what carries the "alive" feeling instead of the body wobbling too.
+BOB_AMP_Y_FRAC = 0.010   # vertical bob amplitude, fraction of character height
+BOB_AMP_X_FRAC = 0.005   # horizontal sway amplitude, fraction of character width
+BOB_PERIOD = 2.2         # seconds per bob cycle
+
+# Limb rig: per character, a list of {box, pivot, amp_deg, period, ...}.
+# `box` = (left, top, right, bottom) in the ORIGINAL cutout's own pixel
+# coordinates (240x425 for zuzu, 240x356 for titu), picked by hand around
+# the one limb each character has, with generous padding so the tip never
+# gets clipped when it swings. `pivot` = the rotation point (shoulder / tail
+# base), also in original pixel coordinates, and must fall inside `box`.
+# The box is erased from the torso and redrawn each frame rotated about the
+# pivot -- at rest (angle 0) that reproduces the original artwork exactly.
+LIMB_DEFS = {
+    "zuzu": [
+        {  # the raised/waving arm (hand + fingers), bottom-left of the
+            # character. `mask_polygon` traces the actual paw shape so only
+            # the arm erases/rotates, not the chunk of shoulder/body that
+            # also sits inside `box` (same fix as Titu's tail -- see the
+            # docstring on `mask_polygon` in LIMB_DEFS["titu"]).
+            "box": (-15, 205, 108, 300),
+            "pivot": (63, 233),
+            "mask_polygon": [
+                (63, 233), (58, 227), (48, 224), (40, 226),
+                (36, 232), (33, 238),
+                (28, 230), (20, 225), (14, 229),
+                (8, 236), (5, 246), (5, 255),
+                (7, 265), (12, 275), (20, 282),
+                (30, 287), (40, 286), (50, 280),
+                (58, 270), (62, 255), (63, 240),
+            ],
+            "rest_deg": 4,
+            "amp_deg": 16,
+            "period": 1.25,
+            "flick_deg": 5,
+            "flick_period": 0.42,
+        },
+    ],
+    "titu": [
+        {  # the tail, bottom-right of the character. `box` just bounds the
+            # crop/rotation; `mask_polygon` (hand-traced around the tail's
+            # actual silhouette, in the SAME original-image coordinates as
+            # `box`/`pivot`) is what actually separates the tail from the
+            # chunk of rear/body that also sits inside this box -- without
+            # it the whole box's opaque area (tail + torso) got erased and
+            # rotated together, which read as a rigid rectangle swinging
+            # instead of just the tail.
+            "box": (145, 225, 240, 330),
+            "pivot": (178, 248),
+            "mask_polygon": [
+                (180, 245), (190, 246), (200, 248), (210, 252), (218, 258),
+                (225, 265), (227, 275), (223, 285), (215, 293),
+                (207, 297), (200, 292), (196, 285),
+                (190, 288), (183, 295), (178, 305), (173, 313),
+                (168, 318), (162, 315), (160, 305),
+                (158, 295), (158, 285), (160, 275), (163, 265),
+                (168, 255), (175, 248),
+            ],
+            "rest_deg": 0,
+            "amp_deg": 18,
+            "period": 0.85,
+            "flick_deg": 7,
+            "flick_period": 0.35,
+        },
+    ],
+}
 
 # --- Duo layout ---------------------------------------------------------
 DUO_CANVAS = (720, 1280)
@@ -163,78 +244,313 @@ def _read_wav_rms_states(audio_path):
     return smoothed, duration
 
 
-def _mesh_wobble(img, frame_idx, fps, seed=0.0, cols=MESH_COLS, rows=MESH_ROWS,
-                  amp_x_frac=IDLE_WOBBLE_AMP_X, amp_y_frac=IDLE_WOBBLE_AMP_Y):
-    """Warp `img` (any PIL mode, incl. RGBA) with a smooth per-vertex
-    displacement field over a cols x rows grid. Amplitude grows away from
-    the bottom edge (feet), like a reed rooted at the ground -- so the
-    head/antennae/raised arm sway visibly more than the torso base. This is
-    what makes the body read as alive instead of one rigid floating block,
-    and unlike a hand-cut limb rig it works on ANY full-body cutout with no
-    per-character prep, so it will apply just as well to a future avatar
-    generated from a user's own photo as it does to Zuzu/Titu.
+def _solo_background(character):
+    """Build a simple synthetic background plate for solo mode: a 2-stop
+    vertical gradient (sky) + a flat grass band, colour-sampled from the
+    original baked-background art so it stays visually consistent, at the
+    exact same canvas size as the cutout (so no rescaling is needed when
+    compositing). This exists purely so there's something clean behind the
+    erased limb -- solo mode used to warp the baked art directly, but the
+    rig needs to erase/redraw a rectangle, which would tear a visible hole
+    in a baked-in background."""
+    baked = Image.open(CHARACTER_IMAGES[character]["closed"]).convert("RGB")
+    w, h = baked.size
+    top_color = baked.getpixel((w - 3, 2))
+    grass_top_y = int(h * 0.90)
+    mid_color = baked.getpixel((w - 3, max(0, grass_top_y - 2)))
+    grass_color = baked.getpixel((2, h - 3))
 
-    The image must already have enough margin (via zoom or transparent
-    padding -- see callers) that displaced sample points never fall outside
-    its bounds, or the warp will pull in blank/edge pixels.
-    """
-    w, h = img.size
+    bg = Image.new("RGB", (w, h))
+    px = bg.load()
+    for y in range(grass_top_y):
+        frac = y / float(max(1, grass_top_y - 1))
+        r = int(top_color[0] + (mid_color[0] - top_color[0]) * frac)
+        g = int(top_color[1] + (mid_color[1] - top_color[1]) * frac)
+        b = int(top_color[2] + (mid_color[2] - top_color[2]) * frac)
+        for x in range(w):
+            px[x, y] = (r, g, b)
+    for y in range(grass_top_y, h):
+        for x in range(w):
+            px[x, y] = grass_color
+    return bg.convert("RGBA")
+
+
+LIMB_ALPHA_THRESH = 10   # alpha value above which a pixel counts as "limb", not background
+LIMB_HOLE_GROW = 1       # px the hole is grown beyond the traced silhouette (covers AA rim)
+LIMB_HOLE_FEATHER = 4    # px soft fade at the hole's edge (blends into surrounding torso)
+
+
+def _erase_and_extract_limb(cutout_img, limb_def):
+    """Crop `limb_def['box']` out of cutout_img as a standalone RGBA patch.
+
+    The box's own alpha (opaque = character) is NOT enough on its own to
+    know which pixels are "the limb": the box necessarily also covers a
+    chunk of the TORSO right next to the limb (e.g. Titu's tail-erase box
+    also overlaps the round rear of the body), and that torso area is just
+    as opaque as the tail. Using "opaque inside the box" as the erase mask
+    therefore erased a whole rectangular slab of real body, not just the
+    tail -- which read as a moving cut-out frame rather than a wagging
+    tail. `mask_polygon` (hand-traced, in the box's own local coordinates)
+    is what actually separates "this pixel is the limb" from "this pixel
+    is the torso that happens to sit inside the box": only pixels that are
+    BOTH inside that polygon AND opaque are erased/extracted, so a slightly
+    generous polygon still can't eat into the body outside it, and the box
+    itself only exists to bound the crop/rotation, not to define the mask."""
+    box = limb_def["box"]
+    patch = cutout_img.crop(box)
+    a_arr = np.asarray(patch.split()[-1], dtype=np.float32)
+    opaque = a_arr > LIMB_ALPHA_THRESH
+
+    polygon = limb_def.get("mask_polygon")
+    if polygon:
+        local_poly = [(px - box[0], py - box[1]) for px, py in polygon]
+        poly_mask = Image.new("L", patch.size, 0)
+        ImageDraw.Draw(poly_mask).polygon(local_poly, fill=255)
+        poly_arr = np.asarray(poly_mask, dtype=np.float32) > 10
+        solid_bool = opaque & poly_arr
+    else:
+        solid_bool = opaque
+
+    # The background-removal pass that produced the transparent cutout PNGs
+    # left small erroneous transparent gaps INSIDE the character's true
+    # silhouette in a couple of spots (e.g. between Titu's tail and its
+    # rump) -- confirmed by comparing against the original baked-background
+    # art, which shows solid body there with no gap at all. Composited over
+    # any background, that stray hole reveals a sliver of it right next to
+    # the limb, reading as a coloured line that doesn't belong. These holes
+    # are "enclosed" (fully surrounded by opaque pixels, unlike the real
+    # background which touches the crop's own border), so they can be
+    # found and treated as "also erase/fill" for the torso -- not as part
+    # of the limb itself, just healing a bad matte -- without needing to
+    # touch the true outer edge of the silhouette at all.
+    import cv2 as _cv2
+    transparent = (~opaque).astype(np.uint8)
+    num_t, labels_t = _cv2.connectedComponents(transparent, connectivity=4)
+    border_labels = set(labels_t[0, :]) | set(labels_t[-1, :]) | set(labels_t[:, 0]) | set(labels_t[:, -1])
+    enclosed = np.isin(labels_t, list(border_labels), invert=True) & (labels_t > 0)
+    solid_bool_torso = solid_bool | enclosed
+
+    # Two different masks are derived from the same traced polygon, grown by
+    # two different amounts, because they serve two different jobs that
+    # were previously (wrongly) sharing one mask:
+    #  - the PATCH's own alpha should hug the true limb silhouette tightly
+    #    (only a couple px of softening for anti-aliasing) so that at rest
+    #    (angle 0) it reproduces the original limb edge pixel-for-pixel.
+    #  - the TORSO's erase area needs to be grown more generously, since the
+    #    hand-traced polygon is never pixel-perfect and any true limb pixel
+    #    left un-erased shows up as a frozen "ghost" fragment.
+    # Using the SAME (generously grown) mask for both, as before, meant that
+    # at rest, the ring between the tight true limb edge and the generous
+    # erase edge got blended TWICE -- once when the torso's own colour was
+    # mixed toward the fill colour there, and again when the patch (using
+    # that same partial alpha) was composited back on top -- which does not
+    # mathematically cancel out to the original colour for any partial
+    # (feathered) alpha, only at fully 0 or fully 1. That mismatch is what
+    # showed up as a persistent tan/gold arc at the limb's edge even at
+    # rest. Decoupling the two masks removes the double-counted blend.
+    def _mask_from(bool_arr, grow, feather):
+        m = Image.fromarray(bool_arr.astype(np.uint8) * 255, mode="L")
+        if grow > 0:
+            m = m.filter(ImageFilter.MaxFilter(2 * grow + 1))
+        if feather > 0:
+            m = m.filter(ImageFilter.GaussianBlur(feather))
+        return np.asarray(m, dtype=np.float32) / 255.0
+
+    patch_alpha = _mask_from(solid_bool, grow=1, feather=1)
+    hole_alpha = _mask_from(solid_bool_torso, grow=LIMB_HOLE_GROW, feather=LIMB_HOLE_FEATHER)
+
+    # The patch itself is masked down to its tight silhouette so it only
+    # ever draws the limb, never the slice of torso that shares its
+    # bounding box -- otherwise that torso slice would still rotate along
+    # with the limb every frame.
+    r, g, b, pa = patch.split()
+    pa_arr = np.asarray(pa, dtype=np.float32) * patch_alpha[: patch.size[1], : patch.size[0]]
+    patch = Image.merge("RGBA", (r, g, b, Image.fromarray(pa_arr.astype(np.uint8), mode="L")))
+
+    # Instead of erasing straight to transparent (which reveals whatever
+    # sits behind the character -- the synthetic sky/grass background plate
+    # -- through any gap between the hole and the redrawn patch), the hole
+    # is filled with texture cloned from the surrounding body via OpenCV's
+    # inpainting (Telea algorithm). A single flat sampled colour was tried
+    # first, but the body art has gradient shading (highlights/shadow), so a
+    # flat patch either mismatched the local gradient or -- when the sample
+    # point landed on an anti-aliased edge pixel -- picked up a stray tinted
+    # colour, both very visible. Inpainting extends the real neighbouring
+    # gradient into the hole instead, which blends correctly regardless of
+    # exactly where on the gradient the hole happens to sit.
+    torso = cutout_img.copy()
+    r, g, b, ta = torso.split()
+    rgb_arr = np.array(torso.convert("RGB"), dtype=np.uint8)
+    ta_arr = np.asarray(ta, dtype=np.float32)
+
+    # box may extend past the image edges (e.g. a negative left, when the
+    # limb is near the canvas border) -- clip to the actual image bounds
+    # before indexing, and take the matching sub-slice of hole_alpha (whose
+    # own local origin is box's top-left, padding included) so the two
+    # stay aligned.
+    ix0, iy0 = max(box[0], 0), max(box[1], 0)
+    ix1, iy1 = min(box[2], torso.width), min(box[3], torso.height)
+    hx0, hy0 = ix0 - box[0], iy0 - box[1]
+    hx1, hy1 = hx0 + (ix1 - ix0), hy0 + (iy1 - iy0)
+    h_full = hole_alpha[hy0:hy1, hx0:hx1]
+
+    # Transparent AND semi-transparent (anti-aliased edge) pixels still
+    # carry leftover matte/background colour in their RGB channels even
+    # where alpha is low or partial -- cv2.inpaint only looks at RGB, not
+    # alpha, so if those edge pixels are left unmasked it happily uses that
+    # stray colour as "known" texture right next to the hole and bleeds it
+    # in (this is what produced a pink/lavender blob for Zuzu: the cutout's
+    # original background was a purple sky gradient, and the AA fringe
+    # around the arm blends arm-green with sky-purple at partial alpha).
+    # Only pixels that are SOLIDLY opaque are trustworthy body colour, so
+    # anything below a high alpha bar is also marked "to fill" (excluded as
+    # a source) -- the algorithm then only ever pulls from real solid body
+    # pixels, however far it has to reach.
+    orig_alpha_arr = np.asarray(cutout_img.split()[-1], dtype=np.float32)
+    valid_source = orig_alpha_arr > 220
+
+    # Thin dark ink outlines around the character's silhouette are just as
+    # solidly opaque as the body fill, so without this they'd also count as
+    # "known good" source colour -- and being right at the edge of almost
+    # every opaque region, they get pulled in disproportionately, staining
+    # the fill dark. Eroding the valid-source mask by a couple px removes
+    # any region only 2-3px wide (the outline stroke) while leaving large
+    # body-colour fields intact.
+    valid_img = Image.fromarray((valid_source.astype(np.uint8)) * 255, mode="L")
+    valid_img = valid_img.filter(ImageFilter.MinFilter(5))
+    valid_source = np.asarray(valid_img, dtype=np.uint8) > 0
+
+    # Both characters stand on a small opaque grass tuft baked into the
+    # cutout art near their feet, right below/inside Titu's tail box -- it's
+    # real, solid, opaque art, so the alpha/outline filters above don't
+    # exclude it, but its green is unrelated to the body it would bleed
+    # into. Excluding the bottom strip of the canvas as a source keeps the
+    # fill pulling only from the body above (a plain gradient), never the
+    # feet decoration. Both limb boxes sit well above this band, so it never
+    # excludes the actual limb art itself.
+    grass_band_y = int(torso.height * 0.88)
+    valid_source[grass_band_y:, :] = False
+
+    full_mask = np.zeros(ta_arr.shape, dtype=np.uint8)
+    full_mask[iy0:iy1, ix0:ix1] = (h_full > 0.15).astype(np.uint8) * 255
+    full_mask[~valid_source] = 255
+    if full_mask.any():
+        import cv2
+        inpainted = cv2.inpaint(rgb_arr, full_mask, 5, cv2.INPAINT_TELEA)
+    else:
+        inpainted = rgb_arr
+
+    # Replace with a binary (thresholded) mask rather than blending RGB by
+    # h_full's continuous value: h_full is also what patch_alpha derives
+    # from (same polygon, different grow/feather), and blending torso's own
+    # colour by that same continuous value here, then AGAIN compositing
+    # patch on top by its own continuous alpha, double-applies the fade and
+    # does not cancel back out to the original colour at rest for any
+    # partial alpha -- only at exactly 0 or 1. Swapping to a hard cutover
+    # (still positioned using the smooth h_full contour, so its boundary
+    # isn't jagged) removes that double-blend: outside the patch's own tight
+    # coverage this area is deep inside the generously-grown erase region
+    # anyway, where inpainted texture should already closely match the
+    # surrounding body, so a hard edge there reads as a colour continuity,
+    # not a seam.
+    region_fill = inpainted[iy0:iy1, ix0:ix1].astype(np.float32)
+    replace = h_full > 0.5
+    region_orig = rgb_arr[iy0:iy1, ix0:ix1]
+    region_orig[replace] = np.round(region_fill[replace]).astype(np.uint8)
+
+    # Same binary cutover for alpha: a pixel below the threshold keeps its
+    # original alpha (which, for a background gap pixel, may be low/zero --
+    # correctly still invisible), instead of being nudged partially opaque
+    # while still showing its old, possibly wrong-tinted colour (that
+    # combination is exactly what let the original pink/lavender AA fringe
+    # show through faintly even after the colour source fix above).
+    box_ta = ta_arr[iy0:iy1, ix0:ix1]
+    box_ta[replace] = 255.0
+
+    torso = Image.merge("RGBA", (
+        *Image.fromarray(rgb_arr, mode="RGB").split(),
+        Image.fromarray(ta_arr.astype(np.uint8), mode="L"),
+    ))
+    return torso, patch
+
+
+def _limb_angle(t, limb_def, seed):
+    """Rotation angle (degrees) for one limb at time t: a slow sine wave
+    (the main wave/wag) plus a smaller, faster sine ("flick") layered on
+    top, so it reads as a wave/wag with a bit of extra wrist/tip snap
+    rather than a single smooth metronome swing."""
+    rest = limb_def.get("rest_deg", 0.0)
+    amp = limb_def["amp_deg"]
+    period = limb_def["period"]
+    flick_deg = limb_def.get("flick_deg", 0.0)
+    flick_period = limb_def.get("flick_period", 0.4)
+    phase = seed
+    wave = amp * math.sin(2 * math.pi * t / period + phase)
+    flick = flick_deg * math.sin(2 * math.pi * t / flick_period + phase * 1.6)
+    return rest + wave + flick
+
+
+def _apply_limbs(torso, patches_and_defs, frame_idx, fps, seed=0.0):
+    """Composite each limb patch back onto `torso`, rotated about its pivot
+    for this frame. At angle 0 this exactly reproduces the original
+    artwork; the pivot stays (almost) fixed while the rest of the patch
+    sweeps an arc around it."""
     t = frame_idx / float(fps)
-
-    xs = [round(i * w / cols) for i in range(cols + 1)]
-    ys = [round(j * h / rows) for j in range(rows + 1)]
-
-    def vertex_disp(u, v):
-        vw = (1 - v) ** 1.5  # 0 at the feet (v=1), max at the top (v=0)
-        phase = seed + u * 2.4 + v * 1.1
-        dx = amp_x_frac * w * vw * (
-            0.65 * math.sin(2 * math.pi * t / IDLE_WOBBLE_T1 + phase) +
-            0.35 * math.sin(2 * math.pi * t / IDLE_WOBBLE_T2 + phase * 1.7 + 0.6)
-        )
-        dy = amp_y_frac * h * vw * 0.6 * math.sin(2 * math.pi * t / IDLE_WOBBLE_T3 + phase + 1.0)
-        return dx, dy
-
-    verts = {}
-    for j, y in enumerate(ys):
-        for i, x in enumerate(xs):
-            dx, dy = vertex_disp(x / w, y / h)
-            verts[(i, j)] = (x + dx, y + dy)
-
-    mesh = []
-    for j in range(rows):
-        for i in range(cols):
-            box = (xs[i], ys[j], xs[i + 1], ys[j + 1])
-            p00 = verts[(i, j)]
-            p01 = verts[(i, j + 1)]
-            p11 = verts[(i + 1, j + 1)]
-            p10 = verts[(i + 1, j)]
-            quad = (*p00, *p01, *p11, *p10)
-            mesh.append((box, quad))
-
-    return img.transform((w, h), Image.MESH, mesh, resample=Image.BICUBIC)
+    frame = torso.copy()
+    for patch, limb_def in patches_and_defs:
+        angle = _limb_angle(t, limb_def, seed)
+        box = limb_def["box"]
+        pivot = limb_def["pivot"]
+        local_pivot = (pivot[0] - box[0], pivot[1] - box[1])
+        rotated = patch.rotate(angle, resample=Image.BICUBIC, center=local_pivot, fillcolor=(0, 0, 0, 0))
+        frame.paste(rotated, (box[0], box[1]), rotated)
+    return frame
 
 
-def _apply_idle_solo(zoomed_img, orig_w, orig_h, frame_idx, fps, seed=0.0):
-    """zoomed_img is the state image pre-scaled by IDLE_ZOOM, giving margin
-    for the mesh warp to sample from. Warps it, then center-crops back down
-    to the original frame size."""
-    zw, zh = zoomed_img.size
-    warped = _mesh_wobble(zoomed_img, frame_idx, fps, seed=seed)
-    left = (zw - orig_w) // 2
-    top = (zh - orig_h) // 2
-    return warped.crop((left, top, left + orig_w, top + orig_h))
-
-
-def _apply_idle_rgba(img, frame_idx, fps, seed=0.0):
-    """Same idea as _apply_idle_solo but for a transparent RGBA cutout: pad
-    with transparent margin instead of zooming (no baked-in background to
-    stretch), so the warp never reveals a hard edge."""
+def _apply_bob(img, frame_idx, fps, seed=0.0):
+    """Small whole-character translate (idle weight-shift), not a warp --
+    the character stays rigid/solid, just shifts position slightly."""
+    t = frame_idx / float(fps)
     w, h = img.size
-    pad = int(max(w, h) * IDLE_PAD_FRAC) + 4
-    canvas = Image.new("RGBA", (w + pad * 2, h + pad * 2), (0, 0, 0, 0))
-    canvas.paste(img, (pad, pad), img)
-    warped = _mesh_wobble(canvas, frame_idx, fps, seed=seed)
-    return warped.crop((pad, pad, pad + w, pad + h))
+    dy = int(round(BOB_AMP_Y_FRAC * h * math.sin(2 * math.pi * t / BOB_PERIOD + seed)))
+    dx = int(round(BOB_AMP_X_FRAC * w * math.sin(2 * math.pi * t / (BOB_PERIOD * 1.35) + seed + 0.7)))
+    if dx == 0 and dy == 0:
+        return img
+    out = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    out.paste(img, (dx, dy), img)
+    return out
+
+
+def _build_rig_states(character):
+    """For each mouth state, load the cutout and pre-erase this character's
+    limb box(es) once (cheap, done a handful of times, not per frame).
+    Returns {state: (torso_with_holes, [(patch, limb_def), ...])}."""
+    limb_defs = LIMB_DEFS.get(character, [])
+    states = {}
+    for state, path in CUTOUT_IMAGES[character].items():
+        img = Image.open(path).convert("RGBA")
+        torso = img
+        patches = []
+        for ld in limb_defs:
+            torso, patch = _erase_and_extract_limb(torso, ld)
+            patches.append(patch)
+        states[state] = (torso, list(zip(patches, limb_defs)))
+    return states
+
+
+def _render_character_frame(rig_states, state, frame_idx, fps, seed=0.0):
+    """One fully-composited character frame (limb rotated + idle bob
+    applied), at the cutout's own original resolution."""
+    torso, patches_and_defs = rig_states[state]
+    frame = _apply_limbs(torso, patches_and_defs, frame_idx, fps, seed)
+    frame = _apply_bob(frame, frame_idx, fps, seed)
+    return frame
+
+
+def _scale_to_height(img, target_h):
+    w, h = img.size
+    scale = target_h / float(h)
+    return img.resize((max(1, int(w * scale)), target_h), Image.LANCZOS)
 
 
 def animate(audio_path, character, out_video_path, frames_dir):
@@ -243,26 +559,17 @@ def animate(audio_path, character, out_video_path, frames_dir):
             "Unknown character '%s', expected one of %s" % (character, list(CHARACTER_IMAGES))
         )
 
-    imgs = CHARACTER_IMAGES[character]
     os.makedirs(frames_dir, exist_ok=True)
-
     smoothed, _duration = _read_wav_rms_states(audio_path)
 
-    orig_size = None
-    zoomed_by_state = {}
-    for state, path in imgs.items():
-        im = Image.open(path).convert("RGB")
-        if orig_size is None:
-            orig_size = im.size
-        zw, zh = int(im.size[0] * IDLE_ZOOM), int(im.size[1] * IDLE_ZOOM)
-        zoomed_by_state[state] = im.resize((zw, zh), Image.LANCZOS)
-
-    orig_w, orig_h = orig_size
-    seed = 0.0
+    bg_plate = _solo_background(character)
+    rig_states = _build_rig_states(character)
 
     for i, st in enumerate(smoothed):
-        frame = _apply_idle_solo(zoomed_by_state[st], orig_w, orig_h, i, FPS, seed)
-        frame.save(os.path.join(frames_dir, "frame_%05d.png" % i))
+        char_frame = _render_character_frame(rig_states, st, i, FPS, seed=0.0)
+        frame = bg_plate.copy()
+        frame.paste(char_frame, (0, 0), char_frame)
+        frame.convert("RGB").save(os.path.join(frames_dir, "frame_%05d.png" % i))
 
     cmd = [
         "ffmpeg", "-y",
@@ -277,15 +584,6 @@ def animate(audio_path, character, out_video_path, frames_dir):
     ]
     subprocess.run(cmd, check=True)
     return out_video_path
-
-
-def _prepare_full_body(cutout_path, canvas_h):
-    """Load a transparent cutout and scale it to a fixed on-screen height."""
-    img = Image.open(cutout_path).convert("RGBA")
-    target_h = max(1, int(canvas_h * DUO_CHAR_HEIGHT_FRAC))
-    w, h = img.size
-    scale = target_h / float(h)
-    return img.resize((max(1, int(w * scale)), target_h), Image.LANCZOS)
 
 
 def _tinted_glow(rgba_img, color, blur):
@@ -353,7 +651,8 @@ def animate_duo(turns, background_path, out_video_path, frames_dir):
     soft colour glow + slight scale-up (no circular crop/ring) around
     whichever one is currently speaking, and only that character's mouth
     animating (the other stays closed / dimmed). Both characters have a
-    light idle body motion (bob/sway/micro-rotation) at all times.
+    small idle weight-shift bob at all times, and whichever limb they have
+    (Zuzu's arm, Titu's tail) rotates about its real attachment point.
     """
     os.makedirs(frames_dir, exist_ok=True)
     canvas_w, canvas_h = DUO_CANVAS
@@ -379,17 +678,12 @@ def animate_duo(turns, background_path, out_video_path, frames_dir):
         states, _duration = _read_wav_rms_states(turn["audio_path"])
         turn_states.append(states)
 
-    # Pre-render each character's 3 mouth-state full-body cutouts once.
-    char_state_imgs = {}
-    for character in DUO_SLOT_X_FRAC:
-        imgs = CUTOUT_IMAGES[character]
-        char_state_imgs[character] = {
-            state: _prepare_full_body(imgs[state], canvas_h)
-            for state in ("closed", "mid", "open")
-        }
+    # Pre-erase each character's limb box(es) once (per mouth state).
+    rig_states = {character: _build_rig_states(character) for character in DUO_SLOT_X_FRAC}
 
     ground_y = int(canvas_h * DUO_GROUND_Y_FRAC)
     anchors_x = {c: int(canvas_w * frac) for c, frac in DUO_SLOT_X_FRAC.items()}
+    target_h = max(1, int(canvas_h * DUO_CHAR_HEIGHT_FRAC))
 
     frame_idx = 0
     for turn_i, turn in enumerate(turns):
@@ -400,9 +694,11 @@ def animate_duo(turns, background_path, out_video_path, frames_dir):
             for character in DUO_SLOT_X_FRAC:
                 is_speaker = character == speaker
                 st = state if is_speaker else "closed"
-                base_img = char_state_imgs[character][st]
-                moved = _apply_idle_rgba(base_img, frame_idx, FPS, DUO_SEED_OFFSET[character])
-                _paste_character(frame, moved, anchors_x[character], ground_y, speaking=is_speaker)
+                raw = _render_character_frame(
+                    rig_states[character], st, frame_idx, FPS, seed=DUO_SEED_OFFSET[character]
+                )
+                scaled = _scale_to_height(raw, target_h)
+                _paste_character(frame, scaled, anchors_x[character], ground_y, speaking=is_speaker)
             frame.convert("RGB").save(os.path.join(frames_dir, "frame_%05d.png" % frame_idx))
             frame_idx += 1
 
