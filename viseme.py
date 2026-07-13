@@ -639,6 +639,60 @@ def _paste_character(frame_rgba, char_img, anchor_x, ground_y, speaking):
     frame_rgba.alpha_composite(img, (px, py))
 
 
+def build_duo_composites(background_path):
+    """Build one static, fully-composited PNG per possible speaker for a duo
+    scene: the AI-generated background with both characters standing at
+    their positions (speaker glowing/scaled-up, other dimmed/static),
+    using each character's raw cutout art at rest -- no limb rig, no idle
+    bob. This is the "Round 4" pivot: instead of trying to fake body motion
+    with a hand-traced cutout+rotate rig (Rounds 1-3, see docstring above --
+    always left some visible seam or wrong-coloured patch no matter how
+    much the mask/inpaint got tuned), this composite is only ever the
+    *input* to a real video-generation model (WaveSpeedAI Wan2.2-S2V,
+    already used for solo mode and confirmed natural), which animates the
+    whole character itself. One composite per possible speaker (2 for a
+    Zuzu/Titu duo) is enough, since the visual state only depends on WHO is
+    currently speaking, not on which line -- the same composite is reused
+    for every turn that speaker has.
+
+    Returns {character: PIL.Image (RGB)}.
+    """
+    canvas_w, canvas_h = DUO_CANVAS
+
+    bg = Image.open(background_path).convert("RGB")
+    bg_ratio = bg.width / bg.height
+    canvas_ratio = canvas_w / canvas_h
+    if bg_ratio > canvas_ratio:
+        new_h = canvas_h
+        new_w = int(bg_ratio * new_h)
+    else:
+        new_w = canvas_w
+        new_h = int(new_w / bg_ratio)
+    bg = bg.resize((new_w, new_h), Image.LANCZOS)
+    left = (new_w - canvas_w) // 2
+    top = (new_h - canvas_h) // 2
+    bg = bg.crop((left, top, left + canvas_w, top + canvas_h)).convert("RGBA")
+
+    ground_y = int(canvas_h * DUO_GROUND_Y_FRAC)
+    anchors_x = {c: int(canvas_w * frac) for c, frac in DUO_SLOT_X_FRAC.items()}
+    target_h = max(1, int(canvas_h * DUO_CHAR_HEIGHT_FRAC))
+
+    rest_cutouts = {
+        character: Image.open(CUTOUT_IMAGES[character]["closed"]).convert("RGBA")
+        for character in DUO_SLOT_X_FRAC
+    }
+
+    composites = {}
+    for speaker in DUO_SLOT_X_FRAC:
+        frame = bg.copy()
+        for character in DUO_SLOT_X_FRAC:
+            is_speaker = character == speaker
+            scaled = _scale_to_height(rest_cutouts[character], target_h)
+            _paste_character(frame, scaled, anchors_x[character], ground_y, speaking=is_speaker)
+        composites[speaker] = frame.convert("RGB")
+    return composites
+
+
 def animate_duo(turns, background_path, out_video_path, frames_dir):
     """
     turns: list of dicts, each { "character": "zuzu"|"titu", "audio_path": "..." },
