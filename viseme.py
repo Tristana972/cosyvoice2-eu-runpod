@@ -172,12 +172,28 @@ LIMB_DEFS = {
 }
 
 # --- Duo layout ---------------------------------------------------------
+# DUO_CHAR_HEIGHT_FRAC was 0.55 with slots at 0.27/0.73 (332px apart on a
+# 720px-wide canvas): at that height each full-body cutout renders wide
+# enough that the two characters' bounding boxes actually overlap in the
+# middle (confirmed visually -- Titu drawn over Zuzu's arm/body instead of
+# standing beside it, "superposés" per feedback). Shrunk + spread out so
+# there's real clearance between them.
 DUO_CANVAS = (720, 1280)
-DUO_CHAR_HEIGHT_FRAC = 0.55   # each character's rendered height, fraction of canvas height
+DUO_CHAR_HEIGHT_FRAC = 0.40   # each character's rendered height, fraction of canvas height
 DUO_GROUND_Y_FRAC = 0.84      # baseline ("feet") y position, fraction of canvas height
 DUO_SLOT_X_FRAC = {
-    "zuzu": 0.27,
-    "titu": 0.73,
+    "zuzu": 0.22,
+    "titu": 0.78,
+}
+# Titu is a dog (on all fours, low to the ground) standing next to Zuzu, not
+# the same height -- per feedback, Titu should only come up to about Zuzu's
+# neck. Both characters used to be scaled to the exact same target_h, which
+# erased that size difference (and made them read as equal-height, floating
+# at the wrong relative scale). This is a per-character multiplier applied
+# on top of DUO_CHAR_HEIGHT_FRAC's base height.
+DUO_CHAR_HEIGHT_SCALE = {
+    "zuzu": 1.0,
+    "titu": 0.72,
 }
 DUO_SEED_OFFSET = {
     "zuzu": 0.0,
@@ -605,17 +621,31 @@ def _dim(rgba_img, factor):
     return Image.merge("RGBA", (r2, g2, b2, a))
 
 
-def _paste_character(frame_rgba, char_img, anchor_x, ground_y, speaking):
+def _paste_character(frame_rgba, char_img, anchor_x, ground_y, speaking, glow=True):
     """Composite one full-body character onto the frame: optional speaking
-    glow + slight scale-up, contact shadow, then the character itself."""
+    glow + slight scale-up, contact shadow, then the character itself.
+
+    `glow=False` (used by build_duo_composites, see its docstring) skips the
+    cyan tinted-glow highlight entirely: that glow was designed as a
+    "who's speaking" cue for the old per-frame rig-animation video, baked
+    directly into a single still image and blurred well past the body's own
+    edges (including down past the feet). Reused unchanged as the *source
+    photo* fed to WaveSpeedAI, that same blur reads as a cyan halo/aura
+    around the character and a cyan smudge at their feet -- exactly the
+    "aura bleue" / "traces" artifacts reported after switching to the
+    WaveSpeedAI pipeline. WaveSpeedAI's own animation of the speaking
+    character already makes clear who's talking, so the glow cue is no
+    longer needed; the scale-up and contact shadow are kept (not colour
+    artifacts, don't cause this issue)."""
     img = char_img
     if speaking:
         w, h = img.size
         img = img.resize((int(w * DUO_SPEAKER_SCALE), int(h * DUO_SPEAKER_SCALE)), Image.LANCZOS)
-        glow, gpad = _tinted_glow(img, DUO_GLOW_COLOR, DUO_GLOW_BLUR)
-        gx = anchor_x - glow.size[0] // 2
-        gy = ground_y - img.size[1] - gpad + int(img.size[1] * 0.06)
-        frame_rgba.alpha_composite(glow, (gx, gy))
+        if glow:
+            glow_img, gpad = _tinted_glow(img, DUO_GLOW_COLOR, DUO_GLOW_BLUR)
+            gx = anchor_x - glow_img.size[0] // 2
+            gy = ground_y - img.size[1] - gpad + int(img.size[1] * 0.06)
+            frame_rgba.alpha_composite(glow_img, (gx, gy))
     else:
         img = _dim(img, DUO_NONSPEAKER_BRIGHTNESS)
 
@@ -687,8 +717,9 @@ def build_duo_composites(background_path):
         frame = bg.copy()
         for character in DUO_SLOT_X_FRAC:
             is_speaker = character == speaker
-            scaled = _scale_to_height(rest_cutouts[character], target_h)
-            _paste_character(frame, scaled, anchors_x[character], ground_y, speaking=is_speaker)
+            char_h = max(1, int(target_h * DUO_CHAR_HEIGHT_SCALE.get(character, 1.0)))
+            scaled = _scale_to_height(rest_cutouts[character], char_h)
+            _paste_character(frame, scaled, anchors_x[character], ground_y, speaking=is_speaker, glow=False)
         composites[speaker] = frame.convert("RGB")
     return composites
 
@@ -751,7 +782,8 @@ def animate_duo(turns, background_path, out_video_path, frames_dir):
                 raw = _render_character_frame(
                     rig_states[character], st, frame_idx, FPS, seed=DUO_SEED_OFFSET[character]
                 )
-                scaled = _scale_to_height(raw, target_h)
+                char_h = max(1, int(target_h * DUO_CHAR_HEIGHT_SCALE.get(character, 1.0)))
+                scaled = _scale_to_height(raw, char_h)
                 _paste_character(frame, scaled, anchors_x[character], ground_y, speaking=is_speaker)
             frame.convert("RGB").save(os.path.join(frames_dir, "frame_%05d.png" % frame_idx))
             frame_idx += 1
