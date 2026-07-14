@@ -636,7 +636,16 @@ def _paste_character(frame_rgba, char_img, anchor_x, ground_y, speaking, glow=Tr
     WaveSpeedAI pipeline. WaveSpeedAI's own animation of the speaking
     character already makes clear who's talking, so the glow cue is no
     longer needed; the scale-up and contact shadow are kept (not colour
-    artifacts, don't cause this issue)."""
+    artifacts, don't cause this issue).
+
+    The non-speaker brightness dimming (previously `_dim(img,
+    DUO_NONSPEAKER_BRIGHTNESS)`) has been removed for the same reason:
+    another "who's speaking" cue designed for the old still-frame rig
+    video, made redundant -- and visually distracting ("il s'allume /
+    l'autre devient terne") -- now that WaveSpeedAI's own body/mouth
+    animation of the speaking character already makes that clear. Both
+    characters now keep their natural brightness regardless of who's
+    speaking."""
     img = char_img
     if speaking:
         w, h = img.size
@@ -646,8 +655,6 @@ def _paste_character(frame_rgba, char_img, anchor_x, ground_y, speaking, glow=Tr
             gx = anchor_x - glow_img.size[0] // 2
             gy = ground_y - img.size[1] - gpad + int(img.size[1] * 0.06)
             frame_rgba.alpha_composite(glow_img, (gx, gy))
-    else:
-        img = _dim(img, DUO_NONSPEAKER_BRIGHTNESS)
 
     w, h = img.size
 
