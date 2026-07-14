@@ -182,8 +182,8 @@ DUO_CANVAS = (720, 1280)
 DUO_CHAR_HEIGHT_FRAC = 0.40   # each character's rendered height, fraction of canvas height
 DUO_GROUND_Y_FRAC = 0.84      # baseline ("feet") y position, fraction of canvas height
 DUO_SLOT_X_FRAC = {
-    "zuzu": 0.22,
-    "titu": 0.78,
+    "zuzu": 0.27,
+    "titu": 0.73,
 }
 # Titu is a dog (on all fours, low to the ground) standing next to Zuzu, not
 # the same height -- per feedback, Titu should only come up to about Zuzu's
