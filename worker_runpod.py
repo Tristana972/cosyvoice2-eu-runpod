@@ -42,11 +42,18 @@ def generate(job):
         # (real video generation per speaking turn, instead of the old
         # cutout+rotate rig). No prompt_audio_url needed for this mode.
         if mode == "duo_composite":
-            background_b64 = values["background_base64"]
+            background_b64 = values.get("background_base64")
+            background_color = values.get("background_color")
             frames_dir = tempfile.mkdtemp(prefix="viseme_composite_")
             background_path = os.path.join(frames_dir, "background.png")
-            with open(background_path, "wb") as f:
-                f.write(base64.b64decode(background_b64))
+            if background_color:
+                from PIL import Image as _PILImage
+                _PILImage.new("RGB", viseme.DUO_CANVAS, background_color).save(background_path)
+            elif background_b64:
+                with open(background_path, "wb") as f:
+                    f.write(base64.b64decode(background_b64))
+            else:
+                return {"status": "ERROR", "error": "background_base64 ou background_color requis"}
 
             composites = viseme.build_duo_composites(background_path)
             out = {}
