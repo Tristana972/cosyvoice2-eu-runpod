@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import requests
 import runpod
+import torch
 import torchaudio
 
 import viseme
@@ -27,6 +28,32 @@ def download_file(url, suffix):
     with os.fdopen(fd, "wb") as f:
         f.write(r.content)
     return path
+
+
+def _trim_hallucinated_tail(wav, sr, text):
+    """CosyVoice2-EU (zero-shot cloning against a fixed reference voice clip)
+    sometimes keeps generating audio well past the end of the real text --
+    observed by Tristana as garbled/hallucinated speech (repeated numbers,
+    unrelated words) tacked onto the end of an otherwise-correct sentence,
+    especially when the reference clip is longer than the target text.
+    Defensive safety net (no access to the model's internals from here):
+    estimate a generous max plausible duration from the text length (slow
+    French speech ~= 8 characters/second, +2s buffer for pauses/intonation)
+    and hard-trim anything beyond that, with a short fade-out so the cut
+    isn't abrupt. Only kicks in when the model runs noticeably long (>1.15x
+    the estimate) -- normal-length output is left completely untouched."""
+    n_chars = max(len((text or "").strip()), 1)
+    max_seconds = (n_chars / 8.0) + 2.0
+    max_samples = int(max_seconds * sr)
+    total_samples = wav.shape[-1]
+    if total_samples <= max_samples * 1.15:
+        return wav
+    fade_samples = min(int(0.15 * sr), max_samples)
+    wav = wav[..., :max_samples].clone()
+    if fade_samples > 0:
+        fade = torch.linspace(1.0, 0.0, fade_samples)
+        wav[..., -fade_samples:] *= fade
+    return wav
 
 
 def generate(job):
@@ -119,6 +146,7 @@ def generate(job):
                 character = t["character"].strip().lower()
                 turn_text = t["text"]
                 wav, sr = cosy.tts(text=turn_text, prompt=prompt_path)
+                wav = _trim_hallucinated_tail(wav, sr, turn_text)
                 turn_audio_path = os.path.join(frames_dir, "turn_%02d.wav" % i)
                 torchaudio.save(turn_audio_path, wav, sr)
                 turns.append({"character": character, "audio_path": turn_audio_path})
@@ -135,6 +163,7 @@ def generate(job):
         character = values.get("character")
 
         wav, sr = cosy.tts(text=text, prompt=prompt_path)
+        wav = _trim_hallucinated_tail(wav, sr, text)
 
         out_audio_path = "/content/out.wav"
         torchaudio.save(out_audio_path, wav, sr)
