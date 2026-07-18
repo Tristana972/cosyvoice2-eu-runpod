@@ -125,6 +125,92 @@ def generate(job):
 
             return {"status": "DONE", "video_base64": video_b64, "mode": "stitch"}
 
+        # --- add_music: mixe une musique IA (générée dans l'app, voir /generate-music) sur une
+        # vidéo duo déjà recollée (mode "stitch"). Deux placements possibles (choisis par
+        # Tristana dans l'app, 18 juillet) :
+        #   - "background" : la musique joue en fond, en boucle si besoin, sous le dialogue
+        #     existant, à un volume réglable (slider "Volume" de l'app, 0.0 à 1.0).
+        #   - "intro" : la musique joue seule pendant quelques secondes (image figée sur la
+        #     première frame de la vidéo) AVANT que la vidéo (avec son propre son) ne démarre.
+        if mode == "add_music":
+            video_url = values["video_url"]
+            music_url = values["music_url"]
+            placement = values.get("placement", "background")
+            volume = float(values.get("volume", 0.5))
+            frames_dir = tempfile.mkdtemp(prefix="viseme_addmusic_")
+            video_path = download_file(video_url, ".mp4")
+            music_path = download_file(music_url, ".mp3")
+            out_video_path = "/content/out_with_music.mp4"
+
+            if placement == "intro":
+                intro_seconds = 4
+                probe = subprocess.run(
+                    [
+                        "ffprobe", "-v", "error", "-select_streams", "v:0",
+                        "-show_entries", "stream=width,height,r_frame_rate",
+                        "-of", "csv=p=0", video_path,
+                    ],
+                    capture_output=True, text=True, check=True,
+                )
+                w_str, h_str, fr_str = probe.stdout.strip().split(",")
+                frame_path = os.path.join(frames_dir, "first_frame.png")
+                subprocess.run(
+                    ["ffmpeg", "-y", "-i", video_path, "-frames:v", "1", frame_path],
+                    check=True,
+                )
+                intro_path = os.path.join(frames_dir, "intro.mp4")
+                subprocess.run(
+                    [
+                        "ffmpeg", "-y",
+                        "-loop", "1", "-i", frame_path,
+                        "-i", music_path,
+                        "-t", str(intro_seconds),
+                        "-vf", "scale=%s:%s,fps=%s" % (w_str, h_str, fr_str),
+                        "-af", "volume=%s,afade=t=out:st=%s:d=0.5" % (volume, max(intro_seconds - 0.5, 0)),
+                        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                        "-c:a", "aac",
+                        "-shortest",
+                        intro_path,
+                    ],
+                    check=True,
+                )
+                concat_list_path = os.path.join(frames_dir, "concat_list.txt")
+                with open(concat_list_path, "w") as f:
+                    f.write("file '%s'\n" % os.path.abspath(intro_path))
+                    f.write("file '%s'\n" % os.path.abspath(video_path))
+                subprocess.run(
+                    [
+                        "ffmpeg", "-y",
+                        "-f", "concat", "-safe", "0",
+                        "-i", concat_list_path,
+                        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                        "-c:a", "aac",
+                        out_video_path,
+                    ],
+                    check=True,
+                )
+            else:
+                subprocess.run(
+                    [
+                        "ffmpeg", "-y",
+                        "-i", video_path,
+                        "-stream_loop", "-1", "-i", music_path,
+                        "-filter_complex",
+                        "[1:a]volume=%s[music];[0:a][music]amix=inputs=2:duration=first:dropout_transition=2[aout]" % volume,
+                        "-map", "0:v", "-map", "[aout]",
+                        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                        "-c:a", "aac",
+                        "-shortest",
+                        out_video_path,
+                    ],
+                    check=True,
+                )
+
+            with open(out_video_path, "rb") as f:
+                video_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+            return {"status": "DONE", "video_base64": video_b64, "mode": "add_music"}
+
         prompt_audio_url = values["prompt_audio_url"]
         prompt_path = download_file(prompt_audio_url, ".wav")
         cosy = get_model()
