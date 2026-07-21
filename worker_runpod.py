@@ -140,33 +140,125 @@ def generate(job):
 
             return {"status": "DONE", "composites": out, "mode": "duo_composite"}
 
-        # --- stitch: concatenate N already-generated WaveSpeedAI clips (one
-        # per duo turn) into a single final video, in order. No TTS/prompt
-        # audio needed -- each clip already has its own audio baked in from
-        # WaveSpeedAI. Re-encodes (rather than stream-copying) so clips with
-        # slightly different encoder parameters still concatenate cleanly.
-        if mode == "stitch":
-            clip_urls = values["clip_urls"]
-            frames_dir = tempfile.mkdtemp(prefix="viseme_stitch_")
-            clip_paths = [download_file(url, ".mp4") for url in clip_urls]
+        # --- concat_turns_audio (20/21 juillet, chantier "plan continu") : concatène
+        # les pistes TTS déjà générées pour chaque réplique d'une scène duo (une par
+        # tour de parole, dans l'ordre) en UNE SEULE piste audio continue, et renvoie
+        # aussi la durée de chacune. Remplace l'ancienne architecture "1 appel
+        # WaveSpeedAI par réplique + recollage vidéo après coup" (voir mode "stitch"
+        # ci-dessous, gardé mais plus utilisé par le pipeline duo2) par "1 seul appel
+        # WaveSpeedAI pour toute la scène" -- les durées renvoyées ici servent à
+        # worker.js à construire un prompt qui décrit précisément, en secondes, quand
+        # chaque personnage parle (voir buildDuoTimelinePrompt), pour que le modèle
+        # anime le bon personnage au bon moment sur une seule vidéo continue.
+        if mode == "concat_turns_audio":
+            audio_b64_list = values["audio_base64_list"]
+            frames_dir = tempfile.mkdtemp(prefix="viseme_concat_audio_")
+            paths = []
+            durations = []
+            for i, b64 in enumerate(audio_b64_list):
+                p = os.path.join(frames_dir, "seg_%d.wav" % i)
+                with open(p, "wb") as f:
+                    f.write(base64.b64decode(b64))
+                paths.append(p)
+                probe = subprocess.run(
+                    [
+                        "ffprobe", "-v", "error",
+                        "-show_entries", "format=duration",
+                        "-of", "csv=p=0", p,
+                    ],
+                    capture_output=True, text=True, check=True,
+                )
+                durations.append(float(probe.stdout.strip()))
 
             concat_list_path = os.path.join(frames_dir, "concat_list.txt")
             with open(concat_list_path, "w") as f:
-                for p in clip_paths:
+                for p in paths:
                     f.write("file '%s'\n" % os.path.abspath(p))
-
-            out_video_path = "/content/out_stitched.mp4"
+            out_audio_path = os.path.join(frames_dir, "combined.wav")
             subprocess.run(
                 [
                     "ffmpeg", "-y",
                     "-f", "concat", "-safe", "0",
                     "-i", concat_list_path,
-                    "-c:v", "libx264", "-pix_fmt", "yuv420p",
-                    "-c:a", "aac",
-                    out_video_path,
+                    "-c", "copy",
+                    out_audio_path,
                 ],
                 check=True,
             )
+            with open(out_audio_path, "rb") as f:
+                combined_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+            return {
+                "status": "DONE",
+                "audio_base64": combined_b64,
+                "durations": durations,
+                "mode": "concat_turns_audio",
+            }
+
+        # --- stitch: concatenate N already-generated WaveSpeedAI clips (one
+        # per duo turn) into a single final video, in order. No TTS/prompt
+        # audio needed -- each clip already has its own audio baked in from
+        # WaveSpeedAI.
+        #
+        # 20 juillet -- retour Tristana : un simple concat "cul à cul" créait un jump cut
+        # visible à chaque changement de tour de parole ("il y a comme un nouveau plan...
+        # une coupe sur un montage"), normal puisque chaque clip est une génération
+        # WaveSpeedAI indépendante (fond/éclairage/mouvement légèrement différents d'un
+        # clip à l'autre même s'ils partent de la même image source). Remplacé le concat
+        # brut par un enchaînement en fondu (xfade vidéo + acrossfade audio, 0.4s) : ça
+        # adoucit la transition au lieu de couper net. Ça ne rend pas les 3 clips
+        # "identiques" en fond/mouvement (ça resterait 3 générations indépendantes), mais
+        # le changement devient un fondu au lieu d'un jump cut brutal.
+        if mode == "stitch":
+            clip_urls = values["clip_urls"]
+            clip_paths = [download_file(url, ".mp4") for url in clip_urls]
+            out_video_path = "/content/out_stitched.mp4"
+
+            if len(clip_paths) == 1:
+                shutil.copy(clip_paths[0], out_video_path)
+            else:
+                XFADE = 0.4  # secondes de fondu entre deux clips consécutifs
+                durations = []
+                for p in clip_paths:
+                    probe = subprocess.run(
+                        [
+                            "ffprobe", "-v", "error",
+                            "-show_entries", "format=duration",
+                            "-of", "csv=p=0", p,
+                        ],
+                        capture_output=True, text=True, check=True,
+                    )
+                    durations.append(float(probe.stdout.strip()))
+
+                inputs = []
+                for p in clip_paths:
+                    inputs += ["-i", p]
+
+                filter_parts = []
+                v_prev, a_prev = "0:v", "0:a"
+                cumulative = durations[0]
+                for i in range(1, len(clip_paths)):
+                    v_out, a_out = "v%d" % i, "a%d" % i
+                    fade = min(XFADE, durations[i - 1], durations[i])
+                    offset = max(cumulative - fade, 0)
+                    filter_parts.append(
+                        "[%s][%d:v]xfade=transition=fade:duration=%s:offset=%s[%s]"
+                        % (v_prev, i, fade, offset, v_out)
+                    )
+                    filter_parts.append(
+                        "[%s][%d:a]acrossfade=d=%s[%s]" % (a_prev, i, fade, a_out)
+                    )
+                    v_prev, a_prev = v_out, a_out
+                    cumulative = offset + durations[i]
+
+                cmd = ["ffmpeg", "-y"] + inputs + [
+                    "-filter_complex", ";".join(filter_parts),
+                    "-map", "[%s]" % v_prev, "-map", "[%s]" % a_prev,
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    "-c:a", "aac",
+                    out_video_path,
+                ]
+                subprocess.run(cmd, check=True)
 
             with open(out_video_path, "rb") as f:
                 video_b64 = base64.b64encode(f.read()).decode("utf-8")

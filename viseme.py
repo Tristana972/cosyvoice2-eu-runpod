@@ -227,11 +227,28 @@ DUO_NONSPEAKER_BRIGHTNESS = 0.82
 DUO_SHADOW_OPACITY = 90
 
 # Round 5 (see module docstring): fraction of canvas height where the
-# foreground-occlusion strip starts. Set a bit ABOVE DUO_GROUND_Y_FRAC
-# (0.84) so the strip overlaps the characters' ankles/lower legs, not just
-# the empty ground below their feet -- otherwise nothing would actually
-# occlude them and this would have no visible effect.
-DUO_FOREGROUND_Y_FRAC = 0.80
+# foreground-occlusion strip starts. Originally 0.80 (just above
+# DUO_GROUND_Y_FRAC, 0.84) so the strip only overlapped the characters'
+# ankles -- worked for a standing pose, but barely touches a SEATED pose
+# (bench, chair...): the character's body occupies most of the canvas
+# ABOVE the ground line (DUO_CHAR_HEIGHT_FRAC=0.40 means the top of a
+# character is around y=0.44), so a strip starting at 0.80 only ever
+# touched the very bottom ~10% of their height, hence Tristana's continued
+# "les 2 perso sont toujours au premier plan" after testing a seated scene.
+# Raising this a lot further (e.g. to cover half the body) was considered
+# and rejected: that same lower-body band is exactly where the earlier
+# "jambes coupées" regression came from (a background object overlapping
+# the characters' legs in the source composite confused WaveSpeedAI's
+# animation into rendering them as cut off, see worker.js
+# buildSceneBackgroundPrompt/DUO comments) -- reintroducing a hard object
+# edge directly across their legs here risks the same bug. Nudged up more
+# modestly instead (0.80 -> 0.75) for a bit more coverage without eating
+# deep into the leg silhouette; buildSceneBackgroundPrompt in worker.js now
+# also asks for that foreground detail to sit toward the LEFT/RIGHT edges
+# of the frame rather than directly in front of where the characters
+# stand, so the strip mostly frames them from the sides instead of
+# potentially cutting across their body with a hard edge.
+DUO_FOREGROUND_Y_FRAC = 0.75
 
 
 def _read_wav_rms_states(audio_path):
@@ -762,8 +779,18 @@ def build_duo_composites(background_path):
     foreground_y = int(canvas_h * DUO_FOREGROUND_Y_FRAC)
     foreground_strip = bg.crop((0, foreground_y, canvas_w, canvas_h))
 
+    # Round 6 (20/21 juillet, chantier "plan continu") : en plus des 2 composites
+    # "qui parle" (zuzu/titu, chacun avec le personnage concerné légèrement
+    # agrandi), on construit aussi un composite "neutral" où AUCUN des deux
+    # n'est agrandi. C'est cette version neutre qui sert désormais d'image
+    # source UNIQUE envoyée à WaveSpeedAI pour toute la scène en un seul appel
+    # (au lieu d'un appel par réplique, avec le composite du "speaker" à
+    # chaque fois) -- voir buildDuoTimelinePrompt/wavespeed_submit dans
+    # worker.js. Elle doit aussi passer par la retouche de pose (voir
+    # pose_submit/pose_wait) comme les 2 autres, donc c'est bien une clé de
+    # plus dans ce dict, pas un calcul à part.
     composites = {}
-    for speaker in DUO_SLOT_X_FRAC:
+    for speaker in list(DUO_SLOT_X_FRAC) + [None]:
         frame = bg.copy()
         for character in DUO_SLOT_X_FRAC:
             is_speaker = character == speaker
@@ -771,7 +798,7 @@ def build_duo_composites(background_path):
             scaled = _scale_to_height(rest_cutouts[character], char_h)
             _paste_character(frame, scaled, anchors_x[character], ground_y, speaking=is_speaker, glow=False)
         frame.alpha_composite(foreground_strip, (0, foreground_y))
-        composites[speaker] = frame.convert("RGB")
+        composites[speaker if speaker is not None else "neutral"] = frame.convert("RGB")
     return composites
 
 
