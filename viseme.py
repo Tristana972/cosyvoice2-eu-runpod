@@ -248,7 +248,25 @@ DUO_SHADOW_OPACITY = 90
 # of the frame rather than directly in front of where the characters
 # stand, so the strip mostly frames them from the sides instead of
 # potentially cutting across their body with a hard edge.
-DUO_FOREGROUND_Y_FRAC = 0.75
+#
+# Round 7 (21 juillet) -- REVERT. Tested on a beach scene: the sand fills
+# the ENTIRE width of the bottom of the frame right up to the horizon (no
+# left/right framing at all, the model didn't follow that part of the
+# prompt), so the 0.75 strip pasted a solid band of pure sand across both
+# characters from the chest down -- Titu (shorter, seated low) was buried
+# up to the neck. This is strictly worse than the "pasted in foreground"
+# look it was meant to fix: Tristana confirmed ("ils sont coupe par la
+# plage... remets comme avant, ils s'asseyaient tres bien et etaient bien
+# entier"). The core issue is that this technique assumes the background's
+# lower strip only ever contains small discrete props (a wall, a hedge) --
+# it silently breaks for any scene where the ground plane is a large flat
+# surface close to camera (sand, grass field, floor, water...), which is
+# a very common case, not an edge case. Disabling outright rather than
+# tuning the fraction again: full, correctly-positioned characters take
+# priority over the depth illusion. If depth is revisited later, it needs
+# a smarter approach than a blind height-based crop (e.g. only occlude
+# with actual detected foreground objects, not a fixed strip).
+DUO_FOREGROUND_Y_FRAC = 1.0
 
 
 def _read_wav_rms_states(audio_path):
