@@ -34,19 +34,67 @@ def _trim_hallucinated_tail(wav, sr, text):
     """CosyVoice2-EU (zero-shot cloning against a fixed reference voice clip)
     sometimes keeps generating audio well past the end of the real text --
     observed by Tristana as garbled/hallucinated speech (repeated numbers,
-    unrelated words) tacked onto the end of an otherwise-correct sentence,
-    especially when the reference clip is longer than the target text.
-    Defensive safety net (no access to the model's internals from here):
-    estimate a generous max plausible duration from the text length (slow
-    French speech ~= 8 characters/second, +2s buffer for pauses/intonation)
-    and hard-trim anything beyond that, with a short fade-out so the cut
-    isn't abrupt. Only kicks in when the model runs noticeably long (>1.15x
-    the estimate) -- normal-length output is left completely untouched."""
+    unrelated words, or a short trailing "ho ho"-type interjection) tacked
+    onto the end of an otherwise-correct sentence, especially when the
+    reference clip is longer than the target text.
+
+    v1 (length-only heuristic, kept below as the fallback) only hard-cut
+    once the TOTAL duration overran the text-length estimate by 15% --
+    good at catching long runaway hallucinations, but a short one-word
+    aside like "Ho Ho" tacked on right at the end rarely pushes the total
+    duration that far over budget, so it slipped through untouched
+    (confirmed by Tristana: "apres 'avant qu'il fasse nuit' Zuzu dit Ho Ho
+    alors qu'il y a un point a la fin de la phrase dans le script").
+
+    v2 (this version): once we're already past a plausible normal-speech
+    duration for the text, scan for the first sustained silence gap
+    (~250ms) in the audio's RMS envelope and hard-cut there instead. A
+    trailing hallucination is reliably preceded by a short pause once the
+    real sentence has actually finished, so cutting at that pause removes
+    it cleanly regardless of how short it is -- something a pure
+    total-duration check can never catch. Only starts searching AFTER the
+    estimated normal duration has elapsed, so a comma/breathing pause
+    mid-sentence (which happens before that point) can't cause an early
+    false cut."""
     n_chars = max(len((text or "").strip()), 1)
-    max_seconds = (n_chars / 8.0) + 2.0
-    max_samples = int(max_seconds * sr)
+    est_seconds = (n_chars / 8.0) + 1.0
     total_samples = wav.shape[-1]
-    if total_samples <= max_samples * 1.15:
+
+    window = max(1, int(0.02 * sr))
+    start_sample = int(est_seconds * sr)
+    if start_sample < total_samples - window:
+        peak = wav.abs().max().item() or 1.0
+        silence_thresh = 0.025
+        gap_windows_needed = max(1, int(0.25 * sr / window))
+        search = wav[..., start_sample:]
+        n_windows = search.shape[-1] // window
+        if n_windows > 0:
+            envelope = search[..., : n_windows * window].reshape(-1, window).abs().mean(dim=-1) / peak
+            run = 0
+            cut_window = None
+            for i in range(len(envelope)):
+                if envelope[i] < silence_thresh:
+                    run += 1
+                    if run >= gap_windows_needed:
+                        cut_window = i - run + 1
+                        break
+                else:
+                    run = 0
+            if cut_window is not None:
+                cut_sample = start_sample + cut_window * window
+                fade_samples = min(int(0.15 * sr), cut_sample)
+                wav = wav[..., :cut_sample].clone()
+                if fade_samples > 0:
+                    fade = torch.linspace(1.0, 0.0, fade_samples)
+                    wav[..., -fade_samples:] *= fade
+                return wav
+
+    # Fallback: no clean silence gap found (e.g. the hallucination runs
+    # straight on with no pause) -- same hard-duration idea as v1, just
+    # using the same (slightly tighter) estimate as the search above.
+    max_seconds = est_seconds + 1.0
+    max_samples = int(max_seconds * sr)
+    if total_samples <= max_samples:
         return wav
     fade_samples = min(int(0.15 * sr), max_samples)
     wav = wav[..., :max_samples].clone()

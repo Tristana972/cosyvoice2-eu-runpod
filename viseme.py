@@ -54,6 +54,27 @@ approach was abandoned):
   gradient + a flat grass band, colour-sampled from the original baked
   art) generated once per character so there's something clean to reveal
   behind the erased limb.
+
+Round 4 (per feedback, see build_duo_composites docstring): whole-image
+rotate/warp rig abandoned for duo in favour of a single static composite
+per possible speaker, fed to WaveSpeedAI (Wan2.2-S2V) for the actual
+animation.
+
+Round 5 (20 juillet, retour Tristana "les 2 perso sont toujours au premier
+plan" -- observé APRES que le fond IA ait été enrichi côté worker.js pour
+avoir une vraie composition en plans, premier plan/plan intermédiaire/
+arrière-plan, voir buildSceneBackgroundPrompt) :
+- Un fond mieux composé ne suffit pas a lui seul : les personnages sont
+  collés en DERNIER, par-dessus l'image de fond entière, donc rien ne les
+  recouvre jamais, même quand le fond contient un élément de premier plan
+  dessiné "near the bottom edges" comme demandé -- il reste visuellement
+  DERRIERE eux dans notre empilement de calques, donc illisible comme
+  premier plan. Corrigé sans appel IA supplémentaire (le fond en contient
+  déjà un, gratuit) : on redécoupe une bande du bas de CE MEME fond généré
+  et on la replaque par-dessus les personnages une fois posés -- ce qui
+  masque leurs pieds/bas de jambes derrière ce qui a été dessiné là
+  (plante, rambarde, bord de table...), donnant une vraie occlusion de
+  premier plan au lieu d'un aplat.
 """
 import wave
 import os
@@ -204,6 +225,13 @@ DUO_GLOW_BLUR = 16
 DUO_SPEAKER_SCALE = 1.08
 DUO_NONSPEAKER_BRIGHTNESS = 0.82
 DUO_SHADOW_OPACITY = 90
+
+# Round 5 (see module docstring): fraction of canvas height where the
+# foreground-occlusion strip starts. Set a bit ABOVE DUO_GROUND_Y_FRAC
+# (0.84) so the strip overlaps the characters' ankles/lower legs, not just
+# the empty ground below their feet -- otherwise nothing would actually
+# occlude them and this would have no visible effect.
+DUO_FOREGROUND_Y_FRAC = 0.80
 
 
 def _read_wav_rms_states(audio_path):
@@ -692,6 +720,15 @@ def build_duo_composites(background_path):
     currently speaking, not on which line -- the same composite is reused
     for every turn that speaker has.
 
+    Round 5 (see module docstring): after pasting both characters, a strip
+    cropped from the BOTTOM of this same generated background is redrawn
+    on top of everything, overlapping the characters' ankles/lower legs.
+    Whatever the background model drew there (it's explicitly asked for
+    foreground detail near the bottom edges, see buildSceneBackgroundPrompt
+    in worker.js) then reads as truly in FRONT of the characters instead of
+    behind them, which is what actually makes them look embedded in the
+    scene instead of pasted on top of it.
+
     Returns {character: PIL.Image (RGB)}.
     """
     canvas_w, canvas_h = DUO_CANVAS
@@ -719,6 +756,12 @@ def build_duo_composites(background_path):
         for character in DUO_SLOT_X_FRAC
     }
 
+    # Round 5 foreground occlusion strip -- see docstring above. Cropped
+    # once from the (already canvas-sized) background, reused for every
+    # speaker composite.
+    foreground_y = int(canvas_h * DUO_FOREGROUND_Y_FRAC)
+    foreground_strip = bg.crop((0, foreground_y, canvas_w, canvas_h))
+
     composites = {}
     for speaker in DUO_SLOT_X_FRAC:
         frame = bg.copy()
@@ -727,6 +770,7 @@ def build_duo_composites(background_path):
             char_h = max(1, int(target_h * DUO_CHAR_HEIGHT_SCALE.get(character, 1.0)))
             scaled = _scale_to_height(rest_cutouts[character], char_h)
             _paste_character(frame, scaled, anchors_x[character], ground_y, speaking=is_speaker, glow=False)
+        frame.alpha_composite(foreground_strip, (0, foreground_y))
         composites[speaker] = frame.convert("RGB")
     return composites
 
