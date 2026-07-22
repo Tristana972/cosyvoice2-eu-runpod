@@ -1678,33 +1678,39 @@ export default function App() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView ref={scrollViewRef} contentContainerStyle={styles.scroll}>
-        {/* 22 juillet : bannière recodée (option B, v3) -- reprend le vrai visuel de l'icône de
-            l'appli demandé par Tristana : ciel dégradé violet → rose → pêche (coucher de soleil)
-            avec une bande d'herbe verte en bas, Zuzu et Titu debout en pied SUR l'herbe (pieds
-            visibles), titre + accroche en dessous, pas de flèche. */}
+        {/* 22 juillet (v4, compacte) : reprend l'image de référence envoyée par Tristana --
+            ciel dégradé violet → rose → vert clair, lune + étoiles en haut, bande d'herbe
+            en bas, Zuzu et Titu en pied (pieds visibles). Bannière resserrée en hauteur
+            comme la version d'origine, dégradé étiré sur toute la largeur. */}
         <LinearGradient
-          colors={['#7C3AED', '#D946A8', '#FBBF77']}
+          colors={['#7C3AED', '#D946A8', '#8FD96B']}
           start={{ x: 0, y: 0 }}
           end={{ x: 0, y: 1 }}
-          style={{ overflow: 'hidden', paddingTop: 24, alignItems: 'center', borderBottomLeftRadius: 24, borderBottomRightRadius: 24 }}
+          style={{ overflow: 'hidden', paddingTop: 12, alignItems: 'center', borderBottomLeftRadius: 16, borderBottomRightRadius: 16 }}
         >
+          {/* lune + étoiles */}
+          <View style={{ position: 'absolute', top: 10, left: 22, width: 14, height: 14, borderRadius: 7, backgroundColor: '#FDF6E3', opacity: 0.9 }} />
+          <View style={{ position: 'absolute', top: 14, right: 40, width: 3, height: 3, borderRadius: 1.5, backgroundColor: '#FDF6E3', opacity: 0.8 }} />
+          <View style={{ position: 'absolute', top: 26, right: 70, width: 2, height: 2, borderRadius: 1, backgroundColor: '#FDF6E3', opacity: 0.7 }} />
+          <View style={{ position: 'absolute', top: 8, right: 90, width: 2, height: 2, borderRadius: 1, backgroundColor: '#FDF6E3', opacity: 0.6 }} />
+
           <View style={{ width: '100%', alignItems: 'center' }}>
             <View style={{ flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'center', zIndex: 2 }}>
               <Image
                 source={{ uri: 'https://raw.githubusercontent.com/Tristana972/cosyvoice2-eu-runpod/main/assets/zuzu_mouth_closed_cutout.png' }}
-                style={{ width: 128, height: 197 }}
+                style={{ width: 76, height: 117 }}
                 resizeMode="contain"
               />
               <Image
                 source={{ uri: 'https://raw.githubusercontent.com/Tristana972/cosyvoice2-eu-runpod/main/assets/titu_mouth_closed_cutout.png' }}
-                style={{ width: 112, height: 147, marginLeft: 4 }}
+                style={{ width: 66, height: 87, marginLeft: 2 }}
                 resizeMode="contain"
               />
             </View>
-            <View style={{ width: '100%', height: 20, backgroundColor: '#65C466', marginTop: -2 }} />
+            <View style={{ width: '100%', height: 12, backgroundColor: '#65C466', marginTop: -1 }} />
           </View>
-          <Text style={[styles.headerTitle, { textAlign: 'center', fontSize: 22, marginTop: 10 }]}>EasyVideo IA</Text>
-          <Text style={[styles.headerSubtitle, { textAlign: 'center', marginBottom: 20 }]}>{'Transformez vos idées en vidéos'}</Text>
+          <Text style={[styles.headerTitle, { textAlign: 'center', fontSize: 18, marginTop: 6 }]}>EasyVideo IA</Text>
+          <Text style={[styles.headerSubtitle, { textAlign: 'center', fontSize: 12, marginBottom: 10 }]}>{'Transformez vos idées en vidéos'}</Text>
         </LinearGradient>
 
         <View style={styles.tabBar}>
