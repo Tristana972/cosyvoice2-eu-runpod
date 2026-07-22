@@ -155,20 +155,54 @@ def generate(job):
             frames_dir = tempfile.mkdtemp(prefix="viseme_concat_audio_")
             paths = []
             durations = []
+            # 21 juillet -- fix "voix hachées" + "accent bizarre" (retour Tristana sur le
+            # premier test du plan continu). Root cause à deux volets, trouvée en repérant un
+            # pic d'amplitude anormal exactement à la jonction entre 2 répliques dans la piste
+            # finale :
+            # 1) Concaténer les segments TTS bruts avec ffmpeg -c copy (aucun ré-encodage)
+            #    laisse un saut brutal d'amplitude à chaque jonction entre répliques (les 2
+            #    pistes ne se rejoignent jamais exactement en phase) -- audible comme un clic
+            #    à chaque changement de tour de parole = "haché".
+            # 2) -c copy suppose un format strictement identique (sample rate, canaux) sur
+            #    TOUS les segments d'entrée -- rien ne garantit que CosyVoice2-EU renvoie
+            #    exactement le même sample rate à chaque appel TTS ; un copy silencieux d'un
+            #    segment à un sample rate différent du premier segment se joue à la mauvaise
+            #    vitesse/hauteur, ce qui peut sonner comme un "accent" ou une voix changée.
+            # Fix : on force maintenant un sample rate/nombre de canaux identiques sur CHAQUE
+            # segment (ré-encodage, plus de simple copy) et on ajoute un fondu de 15ms en
+            # entrée/sortie de chaque segment -- imperceptible sur la parole, mais supprime le
+            # saut brutal à la jonction.
+            target_sr = 24000
+            fade_s = 0.015
             for i, b64 in enumerate(audio_b64_list):
-                p = os.path.join(frames_dir, "seg_%d.wav" % i)
-                with open(p, "wb") as f:
+                raw_path = os.path.join(frames_dir, "raw_%d.wav" % i)
+                with open(raw_path, "wb") as f:
                     f.write(base64.b64decode(b64))
-                paths.append(p)
                 probe = subprocess.run(
                     [
                         "ffprobe", "-v", "error",
                         "-show_entries", "format=duration",
-                        "-of", "csv=p=0", p,
+                        "-of", "csv=p=0", raw_path,
                     ],
                     capture_output=True, text=True, check=True,
                 )
-                durations.append(float(probe.stdout.strip()))
+                dur = float(probe.stdout.strip())
+                durations.append(dur)
+
+                p = os.path.join(frames_dir, "seg_%d.wav" % i)
+                fade_out_start = max(0.0, dur - fade_s)
+                subprocess.run(
+                    [
+                        "ffmpeg", "-y", "-i", raw_path,
+                        "-ar", str(target_sr), "-ac", "1",
+                        "-af", "afade=t=in:st=0:d=%.3f,afade=t=out:st=%.3f:d=%.3f" % (
+                            fade_s, fade_out_start, fade_s,
+                        ),
+                        p,
+                    ],
+                    check=True,
+                )
+                paths.append(p)
 
             concat_list_path = os.path.join(frames_dir, "concat_list.txt")
             with open(concat_list_path, "w") as f:
