@@ -201,7 +201,7 @@ LIMB_DEFS = {
 # there's real clearance between them.
 DUO_CANVAS = (720, 1280)
 DUO_CHAR_HEIGHT_FRAC = 0.40   # each character's rendered height, fraction of canvas height
-DUO_GROUND_Y_FRAC = 0.84      # baseline ("feet") y position, fraction of canvas height
+DUO_GROUND_Y_FRAC = 0.70      # baseline ("feet") y position, fraction of canvas height
 DUO_SLOT_X_FRAC = {
     "zuzu": 0.27,
     "titu": 0.73,
