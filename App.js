@@ -833,10 +833,17 @@ export default function App() {
     const isDuoScene = sameFrameMode
       && speakingList.length === 2
       && speakingList.every((c) => DUO_CAPABLE_AVATAR_IDS.includes(c.heygenAvatarId));
+    // 23 juillet : même pipeline scènes multiples (1-5, décor+script par scène) mais avec un seul
+    // perso RunPod-capable (ex. Zuzu seul) -- le worker gère maintenant les scènes "solo" en sautant
+    // la génération de fond IA + composite, voir isSoloScene côté /duo-generate.
+    const isSoloMultiScene = !sameFrameMode
+      && speakingList.length === 1
+      && DUO_CAPABLE_AVATAR_IDS.includes(speakingList[0].heygenAvatarId);
+    const useScenesPipeline = isDuoScene || isSoloMultiScene;
 
     try {
       let res;
-      if (isDuoScene) {
+      if (useScenesPipeline) {
         // 21 juillet, chantier "sc\u00e8nes multiples" : jusqu'\u00e0 5 sc\u00e8nes (duoScenes), chacune avec son
         // propre d\u00e9cor + son propre script. Dans le script d'une sc\u00e8ne, chaque ligne = une r\u00e9plique,
         // en alternant automatiquement entre les personnages s\u00e9lectionn\u00e9s (r\u00e9p\u00e9titif si plus de
@@ -997,7 +1004,18 @@ export default function App() {
     setTimeout(() => { setGeneratingMusic(false); setMusicFileName(`Cr\u00e9ation IA : "${musicPrompt.trim()}"`); setMusicMode('create'); }, 1800);
   };
 
-  const renderCreate = () => (
+  const renderCreate = () => {
+    // 23 juillet -- pour savoir si on doit proposer l'\u00e9diteur multi-sc\u00e8nes m\u00eame en solo
+    // (1 seul perso RunPod-capable, ex. Zuzu seul), on refait ici le m\u00eame calcul de
+    // "speakingList" que dans handleGenerate (sans doublon de logique m\u00e9tier, juste pour l'UI).
+    const uiSelected = characters.filter((c) => selectedCharacterIds.includes(c.id) && c.heygenAvatarId);
+    const uiSpeaker = uiSelected[0] || characters.find((c) => c.id === 'zuzu-default');
+    const uiSpeakingList = uiSelected.length > 1 ? uiSelected : (uiSpeaker ? [uiSpeaker] : []);
+    const isSoloManualMultiScene = !sameFrameMode
+      && uiSpeakingList.length === 1
+      && DUO_CAPABLE_AVATAR_IDS.includes(uiSpeakingList[0]?.heygenAvatarId);
+    const showScenesEditor = sameFrameMode || isSoloManualMultiScene;
+    return (
     <>
       <Section title={'Choisissez votre mode de cr\u00e9ation'} step={1}>
         <View style={styles.modeRow}>
@@ -1068,13 +1086,15 @@ export default function App() {
               </TouchableOpacity>
             </View>
           </>
-        ) : sameFrameMode ? (
-          // 21 juillet, chantier "sc\u00e8nes multiples" : en mode "Ensemble dans le m\u00eame cadre",
-          // l'\u00e9criture manuelle se fait maintenant sc\u00e8ne par sc\u00e8ne (1 \u00e0 5), chacune avec son
-          // propre d\u00e9cor ET son propre script -- plus besoin de remplir un d\u00e9cor unique en \u00e9tape 5.
+        ) : showScenesEditor ? (
+          // 21 juillet, chantier "sc\u00e8nes multiples" : en mode "Ensemble dans le m\u00eame cadre" (duo)
+          // OU en solo avec un seul perso RunPod-capable (23 juillet), l'\u00e9criture manuelle se fait
+          // maintenant sc\u00e8ne par sc\u00e8ne (1 \u00e0 5), chacune avec son propre d\u00e9cor ET son propre script.
           <>
             <Text style={[styles.helperTextSmall, { marginTop: 8 }]}>
-              {'Une vid\u00e9o = 1 \u00e0 5 sc\u00e8nes ench\u00e2n\u00e9es (fondu entre chaque). Dans chaque sc\u00e8ne, une ligne = une r\u00e9plique, en alternant entre les personnages. Ajoute une action entre crochets (pas lue \u00e0 voix haute), ex. : "[fait un clin d\u2019\u0153il]".'}
+              {isSoloManualMultiScene
+                ? 'Une vid\u00e9o = 1 \u00e0 5 sc\u00e8nes ench\u00e2n\u00e9es (fondu entre chaque). Dans chaque sc\u00e8ne, une ligne = une r\u00e9plique. Ajoute une action entre crochets (pas lue \u00e0 voix haute), ex. : "[fait un clin d\u2019\u0153il]".'
+                : 'Une vid\u00e9o = 1 \u00e0 5 sc\u00e8nes ench\u00e2n\u00e9es (fondu entre chaque). Dans chaque sc\u00e8ne, une ligne = une r\u00e9plique, en alternant entre les personnages. Ajoute une action entre crochets (pas lue \u00e0 voix haute), ex. : "[fait un clin d\u2019\u0153il]".'}
             </Text>
             {duoScenes.map((scene, idx) => (
               <View key={idx} style={{ marginTop: 14, paddingTop: 12, borderTopWidth: idx > 0 ? 1 : 0, borderTopColor: '#2A2A3E' }}>
@@ -1528,7 +1548,8 @@ export default function App() {
         )}
       </View>
     </>
-  );
+    );
+  };
 
   const renderCharacters = () => (
     <View style={styles.section}>
