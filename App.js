@@ -1711,8 +1711,10 @@ export default function App() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView ref={scrollViewRef} contentContainerStyle={styles.scroll}>
-        {/* 24 juillet (v8) : perso centrés horizontalement (comme la photo d'origine envoyée
-            par Tristana) et agrandis, texte conservé en haut à droite, dégradé bleu -> violet. */}
+        {/* 24 juillet (v9) : nouvelles images corps entier de Zuzu et Titu (extraites des
+            aperçus vidéo apercu_zuzu_rig13 / apercu_titu_rig13 où les jambes/pieds étaient
+            visibles), remplaçant les cutouts mouth-swap (prévus pour la vidéo, pas pour la
+            bannière) qui coupaient les jambes. Texte en haut à droite, dégradé bleu -> violet. */}
         <View style={[styles.header, { overflow: 'hidden', padding: 0 }]}>
           <LinearGradient
             colors={['#4F7CFF', '#7C3AED']}
@@ -1720,15 +1722,15 @@ export default function App() {
             end={{ x: 1, y: 1 }}
             style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, width: '100%', height: '100%' }}
           />
-          <View style={{ flex: 1, alignItems: 'flex-start', justifyContent: 'center', flexDirection: 'row', paddingRight: 44, paddingTop: 6 }}>
+          <View style={{ flex: 1, alignItems: 'flex-end', justifyContent: 'center', flexDirection: 'row', paddingRight: 56, paddingBottom: 4 }}>
             <Image
-              source={{ uri: 'https://raw.githubusercontent.com/Tristana972/cosyvoice2-eu-runpod/main/assets/zuzu_mouth_closed_cutout.png' }}
-              style={{ width: 104, height: 130, marginRight: -10 }}
+              source={{ uri: 'https://raw.githubusercontent.com/Tristana972/cosyvoice2-eu-runpod/main/assets/zuzu_fullbody_banner.png' }}
+              style={{ width: 82, height: 131, marginRight: -8 }}
               resizeMode="contain"
             />
             <Image
-              source={{ uri: 'https://raw.githubusercontent.com/Tristana972/cosyvoice2-eu-runpod/main/assets/titu_mouth_closed_cutout.png' }}
-              style={{ width: 80, height: 100 }}
+              source={{ uri: 'https://raw.githubusercontent.com/Tristana972/cosyvoice2-eu-runpod/main/assets/titu_fullbody_banner.png' }}
+              style={{ width: 65, height: 94 }}
               resizeMode="contain"
             />
           </View>
