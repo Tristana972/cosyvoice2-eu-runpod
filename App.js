@@ -1763,7 +1763,7 @@ export default function App() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#0B0E1A' },
   scroll: { paddingBottom: 48 },
-  header: { height: 195, borderBottomLeftRadius: 24, borderBottomRightRadius: 24, backgroundColor: '#7C3AED' },
+  header: { height: 160, borderBottomLeftRadius: 24, borderBottomRightRadius: 24, backgroundColor: '#7C3AED' },
   headerContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   headerTextBlock: { flex: 1, alignItems: 'center' },
   headerTitle: { color: '#fff', fontSize: 17, fontWeight: '800', textShadowColor: 'rgba(0,0,0,0.3)', textShadowOffset: { width: 1, height: 1 }, textShadowRadius: 3 },
