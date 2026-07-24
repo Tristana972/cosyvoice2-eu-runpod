@@ -1711,16 +1711,28 @@ export default function App() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView ref={scrollViewRef} contentContainerStyle={styles.scroll}>
-        {/* 24 juillet (v5) : retour à la taille d'origine (styles.header, une seule image
-            plein fond en resizeMode="cover") avec la nouvelle illustration envoyée par
-            Tristana (ciel dégradé violet -> rose -> vert, lune + étoiles, Zuzu et Titu sur
-            l'herbe). Remplace la v4 compacte (dégradé + formes + 2 images séparées). */}
+        {/* 24 juillet (v7) : dégradé bleu -> violet uni (l'illustration ciel/herbe A978507C
+            était trop terne), Zuzu et Titu en grand dans la bannière, texte remonté en haut
+            à droite et bannière réduite à la taille d'origine (comme demandé par Tristana). */}
         <View style={[styles.header, { overflow: 'hidden', padding: 0 }]}>
-          <Image
-            source={{ uri: 'https://raw.githubusercontent.com/Tristana972/cosyvoice2-eu-runpod/main/A978507C-D52F-42B7-9F14-E2F8366F81BF.png' }}
+          <LinearGradient
+            colors={['#4F7CFF', '#7C3AED']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
             style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, width: '100%', height: '100%' }}
-            resizeMode="cover"
           />
+          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'flex-end', flexDirection: 'row', paddingBottom: 0 }}>
+            <Image
+              source={{ uri: 'https://raw.githubusercontent.com/Tristana972/cosyvoice2-eu-runpod/main/assets/zuzu_mouth_closed_cutout.png' }}
+              style={{ width: 96, height: 120, marginRight: -8 }}
+              resizeMode="contain"
+            />
+            <Image
+              source={{ uri: 'https://raw.githubusercontent.com/Tristana972/cosyvoice2-eu-runpod/main/assets/titu_mouth_closed_cutout.png' }}
+              style={{ width: 74, height: 92 }}
+              resizeMode="contain"
+            />
+          </View>
           <View style={{ position: 'absolute', top: 4, right: 8, alignItems: 'flex-end', width: 150 }}>
             <Text style={[styles.headerTitle, { textAlign: 'right', textShadowColor: 'rgba(0,0,0,0.6)', textShadowOffset: { width: 1, height: 1 }, textShadowRadius: 4 }]}>EasyVideo IA</Text>
             <Text style={[styles.headerSubtitle, { textAlign: 'right', textShadowColor: 'rgba(0,0,0,0.6)', textShadowOffset: { width: 1, height: 1 }, textShadowRadius: 4 }]}>Transformez vos idées{'\n'}en vidéos</Text>
