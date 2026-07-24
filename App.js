@@ -1711,9 +1711,8 @@ export default function App() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView ref={scrollViewRef} contentContainerStyle={styles.scroll}>
-        {/* 24 juillet (v7) : dégradé bleu -> violet uni (l'illustration ciel/herbe A978507C
-            était trop terne), Zuzu et Titu en grand dans la bannière, texte remonté en haut
-            à droite et bannière réduite à la taille d'origine (comme demandé par Tristana). */}
+        {/* 24 juillet (v8) : perso centrés horizontalement (comme la photo d'origine envoyée
+            par Tristana) et agrandis, texte conservé en haut à droite, dégradé bleu -> violet. */}
         <View style={[styles.header, { overflow: 'hidden', padding: 0 }]}>
           <LinearGradient
             colors={['#4F7CFF', '#7C3AED']}
@@ -1721,15 +1720,15 @@ export default function App() {
             end={{ x: 1, y: 1 }}
             style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, width: '100%', height: '100%' }}
           />
-          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'flex-end', flexDirection: 'row', paddingBottom: 0 }}>
+          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', flexDirection: 'row' }}>
             <Image
               source={{ uri: 'https://raw.githubusercontent.com/Tristana972/cosyvoice2-eu-runpod/main/assets/zuzu_mouth_closed_cutout.png' }}
-              style={{ width: 96, height: 120, marginRight: -8 }}
+              style={{ width: 128, height: 160, marginRight: -12 }}
               resizeMode="contain"
             />
             <Image
               source={{ uri: 'https://raw.githubusercontent.com/Tristana972/cosyvoice2-eu-runpod/main/assets/titu_mouth_closed_cutout.png' }}
-              style={{ width: 74, height: 92 }}
+              style={{ width: 98, height: 122 }}
               resizeMode="contain"
             />
           </View>
