@@ -1720,7 +1720,7 @@ export default function App() {
             end={{ x: 1, y: 1 }}
             style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, width: '100%', height: '100%' }}
           />
-          <View style={{ flex: 1, alignItems: 'flex-end', justifyContent: 'center', flexDirection: 'row', paddingRight: 44, paddingBottom: 6 }}>
+          <View style={{ flex: 1, alignItems: 'flex-start', justifyContent: 'center', flexDirection: 'row', paddingRight: 44, paddingTop: 6 }}>
             <Image
               source={{ uri: 'https://raw.githubusercontent.com/Tristana972/cosyvoice2-eu-runpod/main/assets/zuzu_mouth_closed_cutout.png' }}
               style={{ width: 104, height: 130, marginRight: -10 }}
