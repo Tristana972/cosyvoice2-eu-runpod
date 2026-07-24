@@ -1724,7 +1724,7 @@ export default function App() {
           />
           <View style={{ flex: 1, alignItems: 'flex-end', justifyContent: 'center', flexDirection: 'row', paddingRight: 56, paddingBottom: 4 }}>
             <Image
-              source={{ uri: 'https://raw.githubusercontent.com/Tristana972/cosyvoice2-eu-runpod/main/assets/zuzu_fullbody_banner3.png' }}
+              source={{ uri: 'https://raw.githubusercontent.com/Tristana972/cosyvoice2-eu-runpod/main/assets/zuzu_fullbody_banner4.png' }}
               style={{ width: 82, height: 137, marginRight: -8 }}
               resizeMode="contain"
             />
