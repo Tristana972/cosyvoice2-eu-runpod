@@ -1722,15 +1722,15 @@ export default function App() {
             end={{ x: 1, y: 1 }}
             style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, width: '100%', height: '100%' }}
           />
-          <View style={{ flex: 1, alignItems: 'flex-end', justifyContent: 'center', flexDirection: 'row', paddingRight: 56, paddingBottom: 4 }}>
+          <View style={{ flex: 1, alignItems: 'flex-end', justifyContent: 'center', flexDirection: 'row', paddingRight: 56, paddingBottom: 2 }}>
             <Image
               source={{ uri: 'https://raw.githubusercontent.com/Tristana972/cosyvoice2-eu-runpod/main/assets/zuzu_fullbody_banner5.png' }}
-              style={{ width: 82, height: 137, marginRight: -8 }}
+              style={{ width: 96, height: 160, marginRight: -8 }}
               resizeMode="contain"
             />
             <Image
               source={{ uri: 'https://raw.githubusercontent.com/Tristana972/cosyvoice2-eu-runpod/main/assets/titu_fullbody_banner4.png' }}
-              style={{ width: 65, height: 94 }}
+              style={{ width: 76, height: 110 }}
               resizeMode="contain"
             />
           </View>
