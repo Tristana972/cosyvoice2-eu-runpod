@@ -49,6 +49,57 @@ def _with_style_prompt(text):
     return _STYLE_PROMPT + text
 
 
+# 29 juillet -- tâche #211 (Tristana : "passe au curseur pour ajuster les voix en aigu et en
+# grave, et en rapide et lent"). cosyvoice2-eu expose un vrai paramètre `speed` sur cosy.tts()
+# (voir l'option CLI --speed documentée sur PyPI) -- passé directement plus bas. En revanche le
+# modèle n'expose AUCUN contrôle de hauteur (pitch) : ni sur cosy.tts(), ni sur la CLI. Pour que
+# le curseur "Tonalité : Aigu <-> Grave" ait un vrai effet, on applique donc un pitch-shift en
+# post-traitement ffmpeg (déjà installé, voir Dockerfile) sur le wav généré, via le montage
+# classique asetrate (change la hauteur ET la vitesse de lecture) + atempo (compense la vitesse
+# pour revenir à la durée d'origine) -- donc seule la hauteur change au final, pas la durée.
+def _pitch_shift_wav(wav, sr, semitones):
+    if abs(semitones) < 0.05:
+        return wav, sr
+    factor = 2.0 ** (semitones / 12.0)
+    new_rate = max(1000, int(round(sr * factor)))
+    tempo = 1.0 / factor
+    # Le filtre ffmpeg "atempo" n'accepte qu'un facteur entre 0.5 et 2.0 par étage -- on chaîne
+    # plusieurs étages si le facteur de compensation sort de cette plage (pas le cas pour la
+    # plage de tonalité modeste utilisée ici, +/-4 demi-tons, mais on reste robuste).
+    stages = []
+    remaining = tempo
+    while remaining > 2.0:
+        stages.append(2.0)
+        remaining /= 2.0
+    while remaining < 0.5:
+        stages.append(0.5)
+        remaining /= 0.5
+    stages.append(remaining)
+    atempo_chain = ",".join("atempo=%.6f" % s for s in stages)
+
+    in_path = tempfile.mktemp(suffix=".wav")
+    out_path = tempfile.mktemp(suffix=".wav")
+    try:
+        torchaudio.save(in_path, wav, sr)
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", in_path,
+                "-af", "asetrate=%d,aresample=%d,%s" % (new_rate, sr, atempo_chain),
+                out_path,
+            ],
+            check=True, capture_output=True,
+        )
+        shifted, shifted_sr = torchaudio.load(out_path)
+        return shifted, shifted_sr
+    finally:
+        for p in (in_path, out_path):
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
+
+
 def _trim_hallucinated_tail(wav, sr, text):
     """CosyVoice2-EU (zero-shot cloning against a fixed reference voice clip)
     sometimes keeps generating audio well past the end of the real text --
@@ -129,6 +180,10 @@ def generate(job):
     try:
         values = job["input"]
         mode = values.get("mode")
+        # 29 juillet -- tâche #211 : réglages par défaut (utilisés par le mode solo, et comme
+        # repli pour un tour de duo qui n'a pas ses propres speed/pitch_semitones -- voir plus bas).
+        default_speed = float(values.get("speed", 1.0) or 1.0)
+        default_pitch_semitones = float(values.get("pitch_semitones", 0.0) or 0.0)
 
         # --- duo_composite: build the 2 static "who's speaking" composite
         # images (background + both characters, no audio/TTS involved at
@@ -183,7 +238,7 @@ def generate(job):
             #    pistes ne se rejoignent jamais exactement en phase) -- audible comme un clic
             #    à chaque changement de tour de parole = "haché".
             # 2) -c copy suppose un format strictement identique (sample rate, canaux) sur
-            #    TOUS les segments d'entrée ; rien ne garantit que CosyVoice2-EU renvoie
+            #    TOUS les segments d'entrée -- rien ne garantit que CosyVoice2-EU renvoie
             #    exactement le même sample rate à chaque appel TTS ; un copy silencieux d'un
             #    segment à un sample rate différent du premier segment se joue à la mauvaise
             #    vitesse/hauteur, ce qui peut sonner comme un "accent" ou une voix changée.
@@ -519,9 +574,16 @@ def generate(job):
 
         text = values["text"]
         character = values.get("character")
+        # 29 juillet -- tâche #211 : cette branche (audio seul, ou audio + viseme si un
+        # `character` est fourni) est le VRAI point d'entrée TTS partagé, utilisé aussi bien pour
+        # le solo que pour chaque réplique du pipeline duo -- voir worker.js runpodTTS() et
+        # l'appel runpodSubmit() par tour dans /duo-generate. C'est donc ici, et uniquement ici,
+        # qu'il faut appliquer speed/pitch pour que les curseurs aient un effet partout.
+        # (default_speed/default_pitch_semitones déjà lus depuis `values` tout en haut de generate().)
 
-        wav, sr = cosy.tts(text=_with_style_prompt(text), prompt=prompt_path)
+        wav, sr = cosy.tts(text=_with_style_prompt(text), prompt=prompt_path, speed=default_speed)
         wav = _trim_hallucinated_tail(wav, sr, text)
+        wav, sr = _pitch_shift_wav(wav, sr, default_pitch_semitones)
 
         out_audio_path = "/content/out.wav"
         torchaudio.save(out_audio_path, wav, sr)
