@@ -30,6 +30,25 @@ def download_file(url, suffix):
     return path
 
 
+# 28 juillet -- Tristana a comparé une vidéo doublée par ce pipeline à la vidéo Seedance
+# d'origine (dont la voix a été extraite pour le clonage) : la voix générée sonne beaucoup
+# moins dynamique/vivante -- attendu dans une certaine mesure, la synthèse cosyvoice2-eu génère
+# sa propre prosodie et ne reproduit pas l'énergie de la performance d'origine, juste le timbre.
+# Le package documente un contrôle de style expérimental : un préfixe texte suivi du token
+# spécial "<|endofprompt|>" (non prononcé, juste une instruction pour le modèle) avant le texte
+# réellement synthétisé. On l'utilise ici pour redemander explicitement un ton enjoué/dynamique
+# à chaque synthèse -- expérimental côté cosyvoice2-eu, donc pas de garantie que ça compense
+# complètement l'écart constaté, mais c'est le seul levier de prosodie exposé par le package.
+_STYLE_PROMPT = (
+    "Parle avec entrain et dynamisme, comme si tu racontais quelque chose de génial à un ami "
+    "avec le sourire. <|endofprompt|> "
+)
+
+
+def _with_style_prompt(text):
+    return _STYLE_PROMPT + text
+
+
 def _trim_hallucinated_tail(wav, sr, text):
     """CosyVoice2-EU (zero-shot cloning against a fixed reference voice clip)
     sometimes keeps generating audio well past the end of the real text --
@@ -164,7 +183,7 @@ def generate(job):
             #    pistes ne se rejoignent jamais exactement en phase) -- audible comme un clic
             #    à chaque changement de tour de parole = "haché".
             # 2) -c copy suppose un format strictement identique (sample rate, canaux) sur
-            #    TOUS les segments d'entrée -- rien ne garantit que CosyVoice2-EU renvoie
+            #    TOUS les segments d'entrée ; rien ne garantit que CosyVoice2-EU renvoie
             #    exactement le même sample rate à chaque appel TTS ; un copy silencieux d'un
             #    segment à un sample rate différent du premier segment se joue à la mauvaise
             #    vitesse/hauteur, ce qui peut sonner comme un "accent" ou une voix changée.
@@ -363,6 +382,65 @@ def generate(job):
                     ],
                     check=True,
                 )
+            elif placement == "outro":
+                # 28 juillet -- 3e placement demandé par Tristana en plus de "intro"/"background" :
+                # la musique joue seule à la FIN, après la vidéo (miroir de "intro" mais sur la
+                # dernière image figée au lieu de la première, et un fondu d'entrée au lieu de sortie).
+                outro_seconds = 4
+                probe = subprocess.run(
+                    [
+                        "ffprobe", "-v", "error", "-select_streams", "v:0",
+                        "-show_entries", "stream=width,height,r_frame_rate",
+                        "-of", "csv=p=0", video_path,
+                    ],
+                    capture_output=True, text=True, check=True,
+                )
+                w_str, h_str, fr_str = probe.stdout.strip().split(",")
+                dur_probe = subprocess.run(
+                    [
+                        "ffprobe", "-v", "error",
+                        "-show_entries", "format=duration",
+                        "-of", "csv=p=0", video_path,
+                    ],
+                    capture_output=True, text=True, check=True,
+                )
+                video_duration = float(dur_probe.stdout.strip())
+                frame_path = os.path.join(frames_dir, "last_frame.png")
+                subprocess.run(
+                    ["ffmpeg", "-y", "-ss", str(max(video_duration - 0.1, 0)), "-i", video_path, "-frames:v", "1", frame_path],
+                    check=True,
+                )
+                outro_path = os.path.join(frames_dir, "outro.mp4")
+                subprocess.run(
+                    [
+                        "ffmpeg", "-y",
+                        "-loop", "1", "-i", frame_path,
+                        "-i", music_path,
+                        "-t", str(outro_seconds),
+                        "-vf", "scale=%s:%s,fps=%s" % (w_str, h_str, fr_str),
+                        "-af", "volume=%s,afade=t=in:st=0:d=0.5" % volume,
+                        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                        "-c:a", "aac",
+                        "-shortest",
+                        outro_path,
+                    ],
+                    check=True,
+                )
+                concat_list_path = os.path.join(frames_dir, "concat_list.txt")
+                with open(concat_list_path, "w") as f:
+                    f.write("file '%s'\n" % os.path.abspath(video_path))
+                    f.write("file '%s'\n" % os.path.abspath(outro_path))
+                subprocess.run(
+                    [
+                        "ffmpeg", "-y",
+                        "-f", "concat", "-safe", "0",
+                        "-i", concat_list_path,
+                        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                        "-c:a", "aac",
+                        out_video_path,
+                    ],
+                    check=True,
+                )
             elif placement == "dub":
                 # 28 juillet, chantier "doublage" (#141) : la vidéo Seedance source est MUETTE
                 # (aucun flux audio, generate_audio=false côté Seedance) -- il n'y a donc rien à
@@ -425,7 +503,7 @@ def generate(job):
             for i, t in enumerate(turns_in):
                 character = t["character"].strip().lower()
                 turn_text = t["text"]
-                wav, sr = cosy.tts(text=turn_text, prompt=prompt_path)
+                wav, sr = cosy.tts(text=_with_style_prompt(turn_text), prompt=prompt_path)
                 wav = _trim_hallucinated_tail(wav, sr, turn_text)
                 turn_audio_path = os.path.join(frames_dir, "turn_%02d.wav" % i)
                 torchaudio.save(turn_audio_path, wav, sr)
@@ -442,7 +520,7 @@ def generate(job):
         text = values["text"]
         character = values.get("character")
 
-        wav, sr = cosy.tts(text=text, prompt=prompt_path)
+        wav, sr = cosy.tts(text=_with_style_prompt(text), prompt=prompt_path)
         wav = _trim_hallucinated_tail(wav, sr, text)
 
         out_audio_path = "/content/out.wav"
