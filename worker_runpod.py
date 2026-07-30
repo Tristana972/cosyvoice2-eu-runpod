@@ -581,7 +581,17 @@ def generate(job):
         # qu'il faut appliquer speed/pitch pour que les curseurs aient un effet partout.
         # (default_speed/default_pitch_semitones déjà lus depuis `values` tout en haut de generate().)
 
-        wav, sr = cosy.tts(text=_with_style_prompt(text), prompt=prompt_path, speed=default_speed)
+        # 30 juillet -- retour de Tristana : même curseurs au milieu (= speed 1.0, donc
+        # supposé neutre), les voix sonnaient "moins fun" / moins Pixar qu'avant #211. Cause :
+        # on passait `speed=1.0` explicitement à cosy.tts() dans TOUS les cas, alors qu'avant
+        # #211 l'appel ne passait jamais ce paramètre -- et le contrôle de durée activé par
+        # `speed=` (même à 1.0) semble légèrement lisser la prosodie naturelle du modèle. On ne
+        # passe donc `speed=` que si le réglage s'écarte vraiment du neutre, pour retrouver le
+        # rendu d'origine quand les curseurs sont au centre.
+        if abs(default_speed - 1.0) < 0.03:
+            wav, sr = cosy.tts(text=_with_style_prompt(text), prompt=prompt_path)
+        else:
+            wav, sr = cosy.tts(text=_with_style_prompt(text), prompt=prompt_path, speed=default_speed)
         wav = _trim_hallucinated_tail(wav, sr, text)
         wav, sr = _pitch_shift_wav(wav, sr, default_pitch_semitones)
 
