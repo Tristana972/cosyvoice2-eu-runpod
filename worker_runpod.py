@@ -867,7 +867,25 @@ def generate(job):
 
             return {"status": "DONE", "video_base64": video_b64, "character": character}
 
-        with open(out_audio_path, "rb") as f:
+        # 30 juillet -- nouvelle piste, verifiee via /preview-voice + Whisper : le texte
+        # transcrit CORRECTEMENT "J'ai une super maman" en sortie BRUTE de CosyVoice2-EU (donc
+        # le TTS ci-dessus, primer inclus, fonctionne bien) -- mais Tristana continue d'entendre
+        # "j'ai" charabia dans la VIDEO FINALE. Le probleme n'est donc PAS le TTS mais Wan2.2-S2V
+        # (WaveSpeedAI) en aval, qui semble "manger"/mal restituer le tout debut de l'audio
+        # pendant qu'il stabilise sa generation video -- comportement connu des modeles
+        # audio->video (les premieres frames servent a etablir la scene avant de vraiment
+        # suivre l'audio). On ajoute donc un court silence (350ms) au tout debut du wav destine
+        # a WaveSpeedAI, pour que ce "warm-up" morde dans du silence plutot que dans le premier
+        # mot -- uniquement sur ce chemin (audio seul, celui qui part vers wavespeedGenerate
+        # cote worker.js), pas sur le pipeline viseme interne ci-dessus qui n'a pas ce probleme.
+        lead_pad_samples = int(0.35 * sr)
+        padded_wav = torch.cat(
+            [torch.zeros((wav.shape[0], lead_pad_samples), dtype=wav.dtype), wav], dim=-1
+        )
+        padded_audio_path = "/content/out_padded.wav"
+        torchaudio.save(padded_audio_path, padded_wav, sr)
+
+        with open(padded_audio_path, "rb") as f:
             audio_b64 = base64.b64encode(f.read()).decode("utf-8")
 
         return {"status": "DONE", "audio_base64": audio_b64, "sample_rate": sr}
