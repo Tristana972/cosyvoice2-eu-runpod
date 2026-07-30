@@ -104,6 +104,22 @@ def _pitch_shift_wav(wav, sr, semitones):
                 pass
 
 
+def _normalize_loudness(wav, target_peak=0.95, max_gain=12.0):
+    """30 juillet -- retour de Tristana : "le son est super bas alors que j'ai le son a fond
+    sur l'iPhone". CosyVoice2-EU ne sort aucun gain/normalisation -- le wav brut peut avoir un
+    pic tres en dessous du max (0 dB), donc meme telephone a fond ca reste discret. On applique
+    un gain lineaire simple base sur le pic (peak normalize) pour remonter le volume, plafonne
+    pour ne pas amplifier du bruit si le pic est anormalement minuscule, et on ne baisse jamais
+    (uniquement remonter un TTS trop discret)."""
+    peak = wav.abs().max().item()
+    if peak < 1e-6:
+        return wav
+    gain = min(target_peak / peak, max_gain)
+    if gain > 1.01:
+        wav = wav * gain
+    return wav
+
+
 def _normalize_text_for_tts(text):
     """30 juillet -- task #217 : Tristana a rapporte "j'ai une super maman" prononce
     "JA une super maman" par CosyVoice2-EU. Cause probable : le frontend texte-vers-
@@ -526,17 +542,18 @@ def generate(job):
 
             return {"status": "DONE", "video_base64": video_b64, "mode": "burn_subtitles"}
 
-        # --- crop_to_aspect (30 juillet, chantier #225) : le pipeline Avatar classique
-        # (Wan2.2-S2V / wavespeedGenerate côté worker.js) n'a AUCUN paramètre aspect_ratio -- la
-        # vidéo generee suit toujours les dimensions de l'image source. Pour que "Format" (menu 1)
-        # ait un vrai effet ici aussi (comme deja le cas pour Premium 3D via l'aspect_ratio natif
-        # de Seedance), on recadre l'image AVANT l'appel WaveSpeedAI. Recadrage "cover" (remplit
-        # tout le cadre cible, pas de bandes noires) : on rogne le cote en trop, centre pour la
-        # largeur, legerement biaise vers le haut pour la hauteur (le visage d'un perso debout est
-        # generalement dans le tiers superieur -- mieux vaut perdre un peu des pieds que couper la
-        # tete quand on passe d'un format portrait a un format plus large).
+        # --- crop_to_aspect (30 juillet, chantier #225, corrige le meme jour) : le pipeline
+        # Avatar classique (Wan2.2-S2V / wavespeedGenerate cote worker.js) n'a AUCUN parametre
+        # aspect_ratio -- la video generee suit toujours les dimensions de l'image source. Pour
+        # que "Format" (menu 1) ait un vrai effet ici aussi (comme deja le cas pour Premium 3D via
+        # l'aspect_ratio natif de Seedance), on adapte l'image AVANT l'appel WaveSpeedAI.
+        # Version initiale (rognage "cover") coupait le bas/haut du personnage -> corrige en
+        # rognage "contain" + fond flouté : on GARDE l'image entiere (aucun pixel du personnage
+        # perdu), on l'agrandit sur un nouveau canevas au bon ratio, et on remplit l'espace ajoute
+        # avec une version floutee/zoomee de la meme image (technique "fond flou", comme les
+        # stories Instagram) plutot que des bandes noires.
         if mode == "crop_to_aspect":
-            from PIL import Image as _PILImage
+            from PIL import Image as _PILImage, ImageFilter
 
             image_url = values["image_url"]
             aspect_ratio = values.get("aspect_ratio", "9:16")
@@ -548,21 +565,42 @@ def generate(job):
             w, h = img.size
             current_ratio = w / h
 
-            if current_ratio > target_ratio:
-                # Image trop large pour la cible -- on rogne les cotes, hauteur inchangee,
-                # centre horizontalement (un perso est generalement deja centre dans le cadre).
-                new_w = max(1, int(round(h * target_ratio)))
-                left = (w - new_w) // 2
-                img = img.crop((left, 0, left + new_w, h))
+            if abs(current_ratio - target_ratio) < 0.01:
+                canvas_w, canvas_h = w, h
+            elif current_ratio > target_ratio:
+                # Image deja plus large que la cible -- on garde la largeur d'origine et on
+                # agrandit la hauteur du canevas (le personnage garde sa taille, du vide apparait
+                # en haut/bas, comble par le fond floute).
+                canvas_w = w
+                canvas_h = max(1, int(round(w / target_ratio)))
             else:
-                # Image trop haute pour la cible -- on rogne haut/bas, largeur inchangee.
-                new_h = max(1, int(round(w / target_ratio)))
-                top = max(0, int((h - new_h) * 0.15))
-                top = min(top, h - new_h)
-                img = img.crop((0, top, w, top + new_h))
+                # Image plus haute que la cible (cas portrait -> carre/paysage, le plus frequent
+                # ici) -- on garde la hauteur d'origine (donc le personnage entier, tete-pieds,
+                # reste visible) et on agrandit la largeur du canevas.
+                canvas_h = h
+                canvas_w = max(1, int(round(h * target_ratio)))
+
+            canvas = _PILImage.new("RGB", (canvas_w, canvas_h))
+
+            # Fond : version floutee de l'image, agrandie en mode "cover" pour remplir tout le
+            # canevas sans bande noire ni unie.
+            cover_scale = max(canvas_w / w, canvas_h / h)
+            bg_w = max(canvas_w, int(round(w * cover_scale)) + 2)
+            bg_h = max(canvas_h, int(round(h * cover_scale)) + 2)
+            bg = img.resize((bg_w, bg_h), _PILImage.LANCZOS)
+            bg = bg.filter(ImageFilter.GaussianBlur(35))
+            bg_left = (bg_w - canvas_w) // 2
+            bg_top = (bg_h - canvas_h) // 2
+            bg = bg.crop((bg_left, bg_top, bg_left + canvas_w, bg_top + canvas_h))
+            canvas.paste(bg, (0, 0))
+
+            # Premier plan : l'image ENTIERE, taille d'origine, centree -- rien n'est coupe.
+            fg_left = (canvas_w - w) // 2
+            fg_top = (canvas_h - h) // 2
+            canvas.paste(img, (fg_left, fg_top))
 
             out_path = "/content/out_cropped.png"
-            img.save(out_path, "PNG")
+            canvas.save(out_path, "PNG")
             with open(out_path, "rb") as f:
                 image_b64 = base64.b64encode(f.read()).decode("utf-8")
 
@@ -756,6 +794,7 @@ def generate(job):
                 wav, sr = cosy.tts(text=_with_style_prompt(_normalize_text_for_tts(turn_text)), prompt=prompt_path)
                 wav = _trim_hallucinated_head(wav, sr, turn_text)
                 wav = _trim_hallucinated_tail(wav, sr, turn_text)
+                wav = _normalize_loudness(wav)
                 turn_audio_path = os.path.join(frames_dir, "turn_%02d.wav" % i)
                 torchaudio.save(turn_audio_path, wav, sr)
                 turns.append({"character": character, "audio_path": turn_audio_path})
@@ -791,6 +830,7 @@ def generate(job):
         wav = _trim_hallucinated_head(wav, sr, text)
         wav = _trim_hallucinated_tail(wav, sr, text)
         wav, sr = _pitch_shift_wav(wav, sr, default_pitch_semitones)
+        wav = _normalize_loudness(wav)
 
         out_audio_path = "/content/out.wav"
         torchaudio.save(out_audio_path, wav, sr)
