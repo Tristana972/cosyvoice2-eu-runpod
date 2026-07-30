@@ -526,6 +526,48 @@ def generate(job):
 
             return {"status": "DONE", "video_base64": video_b64, "mode": "burn_subtitles"}
 
+        # --- crop_to_aspect (30 juillet, chantier #225) : le pipeline Avatar classique
+        # (Wan2.2-S2V / wavespeedGenerate côté worker.js) n'a AUCUN paramètre aspect_ratio -- la
+        # vidéo generee suit toujours les dimensions de l'image source. Pour que "Format" (menu 1)
+        # ait un vrai effet ici aussi (comme deja le cas pour Premium 3D via l'aspect_ratio natif
+        # de Seedance), on recadre l'image AVANT l'appel WaveSpeedAI. Recadrage "cover" (remplit
+        # tout le cadre cible, pas de bandes noires) : on rogne le cote en trop, centre pour la
+        # largeur, legerement biaise vers le haut pour la hauteur (le visage d'un perso debout est
+        # generalement dans le tiers superieur -- mieux vaut perdre un peu des pieds que couper la
+        # tete quand on passe d'un format portrait a un format plus large).
+        if mode == "crop_to_aspect":
+            from PIL import Image as _PILImage
+
+            image_url = values["image_url"]
+            aspect_ratio = values.get("aspect_ratio", "9:16")
+            ar_map = {"9:16": 9.0 / 16.0, "1:1": 1.0, "16:9": 16.0 / 9.0}
+            target_ratio = ar_map.get(aspect_ratio, 9.0 / 16.0)  # largeur / hauteur
+
+            img_path = download_file(image_url, ".png")
+            img = _PILImage.open(img_path).convert("RGB")
+            w, h = img.size
+            current_ratio = w / h
+
+            if current_ratio > target_ratio:
+                # Image trop large pour la cible -- on rogne les cotes, hauteur inchangee,
+                # centre horizontalement (un perso est generalement deja centre dans le cadre).
+                new_w = max(1, int(round(h * target_ratio)))
+                left = (w - new_w) // 2
+                img = img.crop((left, 0, left + new_w, h))
+            else:
+                # Image trop haute pour la cible -- on rogne haut/bas, largeur inchangee.
+                new_h = max(1, int(round(w / target_ratio)))
+                top = max(0, int((h - new_h) * 0.15))
+                top = min(top, h - new_h)
+                img = img.crop((0, top, w, top + new_h))
+
+            out_path = "/content/out_cropped.png"
+            img.save(out_path, "PNG")
+            with open(out_path, "rb") as f:
+                image_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+            return {"status": "DONE", "image_base64": image_b64, "mode": "crop_to_aspect"}
+
         # --- add_music: mixe une musique IA (générée dans l'app, voir /generate-music) sur une
         # vidéo duo déjà recollée (mode "stitch"). Deux placements possibles (choisis par
         # Tristana dans l'app, 18 juillet) :
