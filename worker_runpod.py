@@ -120,6 +120,26 @@ def _normalize_loudness(wav, target_peak=0.95, max_gain=12.0):
     return wav
 
 
+# 30 juillet -- retour de Tristana (encore) : "Oh Dieu que c'est beau" -> "hohoho ho que
+# c'est beau", puis "J'ai une super maman" -> premier mot rendu comme un grognement informe
+# ("haaaa"), pas du tout "j'ai". Deux essais differents, meme symptome : le tout debut de la
+# synthese (les toutes premieres syllabes) part en vrille -- CosyVoice2-EU zero-shot a
+# visiblement besoin d'un instant pour "accrocher" la prosodie de la voix de reference avant de
+# produire un son correct, et ce tout premier instant est justement celui qu'on entend en entier
+# quand la phrase commence pile sur un mot court/exclamatif. _trim_hallucinated_head ne peut rien
+# y faire seul : il ne coupe qu'apres un silence net, or ici il n'y a PAS de silence (le grognement
+# s'enchaine directement sur la suite). Palliatif : on fait precede le texte reel d'un petit mot
+# d'amorce neutre ("Alors, ") qui absorbe ce "faux depart" du modele a la place du vrai texte --
+# le silence naturel apres la virgule donne enfin a _trim_hallucinated_head une vraie coupure nette
+# a reperer et a supprimer. Si jamais la coupe ne se declenche pas (garde-fous trop stricts), on
+# degrade proprement : la phrase sort juste avec un "Alors," en trop au debut, jamais du charabia.
+_TTS_PRIMER = "Alors, "
+
+
+def _prime_text_for_tts(text):
+    return _TTS_PRIMER + (text or "")
+
+
 def _normalize_text_for_tts(text):
     """30 juillet -- task #217 : Tristana a rapporte "j'ai une super maman" prononce
     "JA une super maman" par CosyVoice2-EU. Cause probable : le frontend texte-vers-
@@ -791,7 +811,7 @@ def generate(job):
             for i, t in enumerate(turns_in):
                 character = t["character"].strip().lower()
                 turn_text = t["text"]
-                wav, sr = cosy.tts(text=_with_style_prompt(_normalize_text_for_tts(turn_text)), prompt=prompt_path)
+                wav, sr = cosy.tts(text=_with_style_prompt(_normalize_text_for_tts(_prime_text_for_tts(turn_text))), prompt=prompt_path)
                 wav = _trim_hallucinated_head(wav, sr, turn_text)
                 wav = _trim_hallucinated_tail(wav, sr, turn_text)
                 wav = _normalize_loudness(wav)
@@ -824,9 +844,9 @@ def generate(job):
         # passe donc `speed=` que si le réglage s'écarte vraiment du neutre, pour retrouver le
         # rendu d'origine quand les curseurs sont au centre.
         if abs(default_speed - 1.0) < 0.03:
-            wav, sr = cosy.tts(text=_with_style_prompt(_normalize_text_for_tts(text)), prompt=prompt_path)
+            wav, sr = cosy.tts(text=_with_style_prompt(_normalize_text_for_tts(_prime_text_for_tts(text))), prompt=prompt_path)
         else:
-            wav, sr = cosy.tts(text=_with_style_prompt(_normalize_text_for_tts(text)), prompt=prompt_path, speed=default_speed)
+            wav, sr = cosy.tts(text=_with_style_prompt(_normalize_text_for_tts(_prime_text_for_tts(text))), prompt=prompt_path, speed=default_speed)
         wav = _trim_hallucinated_head(wav, sr, text)
         wav = _trim_hallucinated_tail(wav, sr, text)
         wav, sr = _pitch_shift_wav(wav, sr, default_pitch_semitones)
