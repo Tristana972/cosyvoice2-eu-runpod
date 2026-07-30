@@ -251,6 +251,36 @@ def _trim_hallucinated_tail(wav, sr, text):
     return wav
 
 
+# 30 juillet, chantier #190 (multilingue reel) : construit un fichier .srt classique a partir
+# d'une liste de "cues" {text, start, end} (secondes, floats) -- les timings viennent directement
+# de scene.turnDurations (worker.js, meme timeline que celle utilisee pour le lip-sync), donc les
+# sous-titres tombent exactement sur les bonnes repliques sans nouveau calcul de synchro.
+def _seconds_to_srt_timestamp(seconds):
+    if seconds < 0:
+        seconds = 0.0
+    total_ms = int(round(seconds * 1000))
+    hours, rem_ms = divmod(total_ms, 3600000)
+    minutes, rem_ms = divmod(rem_ms, 60000)
+    secs, ms = divmod(rem_ms, 1000)
+    return "%02d:%02d:%02d,%03d" % (hours, minutes, secs, ms)
+
+
+def _build_srt(cues):
+    lines = []
+    for i, cue in enumerate(cues, start=1):
+        text = (cue.get("text") or "").strip()
+        if not text:
+            continue
+        lines.append(str(i))
+        lines.append("%s --> %s" % (
+            _seconds_to_srt_timestamp(float(cue.get("start", 0))),
+            _seconds_to_srt_timestamp(float(cue.get("end", 0))),
+        ))
+        lines.append(text)
+        lines.append("")
+    return "\n".join(lines)
+
+
 def generate(job):
     prompt_path = None
     frames_dir = None
@@ -449,6 +479,52 @@ def generate(job):
                 video_b64 = base64.b64encode(f.read()).decode("utf-8")
 
             return {"status": "DONE", "video_base64": video_b64, "mode": "stitch"}
+
+        # --- burn_subtitles (30 juillet, chantier #190) : incruste des sous-titres (.srt genere a
+        # la volee) sur une vidéo déjà générée, via le filtre ffmpeg "subtitles" (libass). Appelé
+        # par worker.js sur le clip d'UNE scène (avant recollage multi-scènes), avec les cues
+        # {text, start, end} calculées à partir des durées réelles de chaque réplique (mêmes
+        # durées que celles utilisées pour le lip-sync) -- donc pas de nouveau calcul de synchro
+        # à faire ici, juste écrire le .srt et laisser ffmpeg l'incruster.
+        # Police forcée à "Noto Sans CJK SC" (voir Dockerfile, fonts-noto-cjk) : cette famille
+        # couvre à la fois le latin (français/anglais/espagnol/portugais) ET le chinois/japonais
+        # dans UNE seule police, donc pas de sous-titres "tofu" (carrés vides) selon la langue
+        # choisie -- si le Dockerfile n'a pas encore été redéployé avec ce paquet, libass retombe
+        # sur une police par défaut du système (les sous-titres latins restent lisibles, seuls les
+        # sous-titres chinois/japonais seraient concernés).
+        if mode == "burn_subtitles":
+            video_url = values["video_url"]
+            cues = values.get("cues") or []
+            video_path = download_file(video_url, ".mp4")
+            out_video_path = "/content/out_subtitled.mp4"
+
+            srt_body = _build_srt(cues)
+            if not srt_body.strip():
+                shutil.copy(video_path, out_video_path)
+            else:
+                subs_dir = tempfile.mkdtemp(prefix="subs_")
+                srt_path = os.path.join(subs_dir, "subs.srt")
+                with open(srt_path, "w", encoding="utf-8") as f:
+                    f.write(srt_body)
+                style = (
+                    "FontName=Noto Sans CJK SC,FontSize=22,PrimaryColour=&H00FFFFFF,"
+                    "OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=0,"
+                    "Alignment=2,MarginV=48"
+                )
+                subprocess.run(
+                    [
+                        "ffmpeg", "-y", "-i", video_path,
+                        "-vf", "subtitles=%s:force_style='%s'" % (srt_path, style),
+                        "-c:a", "copy",
+                        out_video_path,
+                    ],
+                    check=True,
+                )
+
+            with open(out_video_path, "rb") as f:
+                video_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+            return {"status": "DONE", "video_base64": video_b64, "mode": "burn_subtitles"}
 
         # --- add_music: mixe une musique IA (générée dans l'app, voir /generate-music) sur une
         # vidéo duo déjà recollée (mode "stitch"). Deux placements possibles (choisis par
