@@ -2,7 +2,7 @@ FROM runpod/pytorch:2.2.1-py3.10-cuda12.1.1-devel-ubuntu22.04
 
 WORKDIR /content
 
-RUN apt-get update && apt-get install -y ffmpeg git && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ffmpeg git fonts-noto-cjk fonts-dejavu-core && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir runpod requests torchaudio
 
