@@ -104,6 +104,79 @@ def _pitch_shift_wav(wav, sr, semitones):
                 pass
 
 
+def _normalize_text_for_tts(text):
+    """30 juillet -- task #217 : Tristana a rapporte "j'ai une super maman" prononce
+    "JA une super maman" par CosyVoice2-EU. Cause probable : le frontend texte-vers-
+    phonemes du modele traite l'apostrophe droite ' (U+0027) plus comme une coupure/
+    guillemet que comme un marqueur de liaison francaise, ce qui casse l'elision (j'ai,
+    j'aime, qu'il, l'ai, aujourd'hui...) et fait sonner la syllabe comme deux mots separes.
+    Remplacement par l'apostrophe typographique U+2019 (') avant synthese -- fix standard
+    pour les frontends TTS/regles francaises (espeak et la plupart des normaliseurs FR la
+    reconnaissent explicitement comme marqueur d'elision, contrairement a l'apostrophe
+    droite)."""
+    if not text:
+        return text
+    return text.replace("'", "’")
+
+
+def _trim_hallucinated_head(wav, sr, text):
+    """30 juillet -- variante "en tete" du fix ci-dessous (task #217) : Tristana a vu
+    Snoopy dire "HAHAHA C'est vrai, je l'aime aussi." alors que "hahaha" n'etait pas dans
+    le script. Meme cause probable que la hallucination de fin (CosyVoice2-EU zero-shot qui
+    emprunte un peu de prosodie/contenu du clip de reference au demarrage), donc meme
+    remede applique en miroir : chercher une coupure de silence nette (~200ms) tres tot
+    dans l'audio, et si ce qui suit cette coupure a une duree plausible pour le texte reel,
+    jeter tout ce qu'il y a avant. Volontairement conservateur (fenetre de recherche courte,
+    exige du bruit AVANT le silence, et garde-fou sur la duree restante) : mieux vaut laisser
+    passer une hallucination que couper un vrai debut de phrase."""
+    n_chars = max(len((text or "").strip()), 1)
+    est_seconds = (n_chars / 8.0) + 1.0
+    total_samples = wav.shape[-1]
+
+    window = max(1, int(0.02 * sr))
+    max_head_seconds = min(1.2, est_seconds * 0.5)
+    max_head_sample = int(max_head_seconds * sr)
+    if max_head_sample < window * 2 or max_head_sample >= total_samples:
+        return wav
+
+    peak = wav.abs().max().item() or 1.0
+    silence_thresh = 0.025
+    gap_windows_needed = max(1, int(0.2 * sr / window))
+    search = wav[..., :max_head_sample]
+    n_windows = search.shape[-1] // window
+    if n_windows == 0:
+        return wav
+    envelope = search[..., : n_windows * window].reshape(-1, window).abs().mean(dim=-1) / peak
+
+    min_noise_windows = max(1, int(0.08 * sr / window))
+    noise_run = 0
+    run = 0
+    cut_window = None
+    for i in range(len(envelope)):
+        if envelope[i] < silence_thresh:
+            run += 1
+            if noise_run >= min_noise_windows and run >= gap_windows_needed:
+                cut_window = i + 1
+                break
+        else:
+            noise_run += 1
+            run = 0
+    if cut_window is None:
+        return wav
+
+    cut_sample = cut_window * window
+    remaining_seconds = (total_samples - cut_sample) / sr
+    if remaining_seconds < est_seconds * 0.6:
+        return wav
+
+    fade_samples = min(int(0.05 * sr), cut_sample)
+    wav = wav[..., cut_sample:].clone()
+    if fade_samples > 0:
+        fade = torch.linspace(0.0, 1.0, fade_samples)
+        wav[..., :fade_samples] *= fade
+    return wav
+
+
 def _trim_hallucinated_tail(wav, sr, text):
     """CosyVoice2-EU (zero-shot cloning against a fixed reference voice clip)
     sometimes keeps generating audio well past the end of the real text --
@@ -562,7 +635,8 @@ def generate(job):
             for i, t in enumerate(turns_in):
                 character = t["character"].strip().lower()
                 turn_text = t["text"]
-                wav, sr = cosy.tts(text=_with_style_prompt(turn_text), prompt=prompt_path)
+                wav, sr = cosy.tts(text=_with_style_prompt(_normalize_text_for_tts(turn_text)), prompt=prompt_path)
+                wav = _trim_hallucinated_head(wav, sr, turn_text)
                 wav = _trim_hallucinated_tail(wav, sr, turn_text)
                 turn_audio_path = os.path.join(frames_dir, "turn_%02d.wav" % i)
                 torchaudio.save(turn_audio_path, wav, sr)
@@ -593,9 +667,10 @@ def generate(job):
         # passe donc `speed=` que si le réglage s'écarte vraiment du neutre, pour retrouver le
         # rendu d'origine quand les curseurs sont au centre.
         if abs(default_speed - 1.0) < 0.03:
-            wav, sr = cosy.tts(text=_with_style_prompt(text), prompt=prompt_path)
+            wav, sr = cosy.tts(text=_with_style_prompt(_normalize_text_for_tts(text)), prompt=prompt_path)
         else:
-            wav, sr = cosy.tts(text=_with_style_prompt(text), prompt=prompt_path, speed=default_speed)
+            wav, sr = cosy.tts(text=_with_style_prompt(_normalize_text_for_tts(text)), prompt=prompt_path, speed=default_speed)
+        wav = _trim_hallucinated_head(wav, sr, text)
         wav = _trim_hallucinated_tail(wav, sr, text)
         wav, sr = _pitch_shift_wav(wav, sr, default_pitch_semitones)
 
