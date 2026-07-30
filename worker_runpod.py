@@ -34,19 +34,23 @@ def download_file(url, suffix):
 # d'origine (dont la voix a été extraite pour le clonage) : la voix générée sonne beaucoup
 # moins dynamique/vivante -- attendu dans une certaine mesure, la synthèse cosyvoice2-eu génère
 # sa propre prosodie et ne reproduit pas l'énergie de la performance d'origine, juste le timbre.
-# Le package documente un contrôle de style expérimental : un préfixe texte suivi du token
-# spécial "<|endofprompt|>" (non prononcé, juste une instruction pour le modèle) avant le texte
-# réellement synthétisé. On l'utilise ici pour redemander explicitement un ton enjoué/dynamique
-# à chaque synthèse -- expérimental côté cosyvoice2-eu, donc pas de garantie que ça compense
-# complètement l'écart constaté, mais c'est le seul levier de prosodie exposé par le package.
-_STYLE_PROMPT = (
-    "Parle avec entrain et dynamisme, comme si tu racontais quelque chose de génial à un ami "
-    "avec le sourire. <|endofprompt|> "
-)
+# Le package documentait un contrôle de style expérimental : un préfixe texte suivi du token
+# spécial "<|endofprompt|>", censé être une instruction NON prononcée pour le modèle (avant le
+# texte réellement synthétisé). 30 juillet -- Tristana a entendu ce préfixe lu à voix haute mot
+# pour mot ("Parle avec entrain et dynamisme, comme si tu racontais quelque chose de génial à un
+# ami...") au lieu d'être silencieux : le token <|endofprompt|> n'est visiblement PAS interprété
+# comme un token de contrôle par ce package (cosyvoice2-eu, wrapper "zero-shot" simple autour du
+# modèle -- pas l'API instruct dédiée de CosyVoice2). Retiré : mieux vaut une voix un peu plus
+# plate qu'une phrase parasite récitée avant chaque réplique. _STYLE_PROMPT gardé en commentaire
+# si jamais une vraie API instruct devient disponible plus tard.
+# _STYLE_PROMPT = (
+#     "Parle avec entrain et dynamisme, comme si tu racontais quelque chose de génial à un ami "
+#     "avec le sourire. <|endofprompt|> "
+# )
 
 
 def _with_style_prompt(text):
-    return _STYLE_PROMPT + text
+    return text
 
 
 # 29 juillet -- tâche #211 (Tristana : "passe au curseur pour ajuster les voix en aigu et en
