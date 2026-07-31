@@ -150,27 +150,35 @@ def _normalize_loudness(wav, target_peak=0.95, max_gain=12.0):
 # declencher la meme pause d'intonation. Si jamais _trim_hallucinated_head ne trouve aucune
 # coupure nette (mots identiques adjacents, pas toujours de silence entre eux), on degrade
 # proprement : le mot sort juste repete deux fois, jamais du charabia ni un blanc de 600ms.
-# 31 juillet -- retour Tristana (Test 2, "Salut Titu...") : ce prime etait applique a TOUS les
-# textes, sans exception -- or les 2 SEULS cas confirmes de hallucination en tete ("J'ai une
-# super maman" -> "haaaa", "Oh Dieu que c'est beau" -> "hohoho") sont tous les 2 des mots tres
-# courts (<=4 caracteres avant l'apostrophe/l'espace). "Salut" (5 caracteres) n'a jamais ete
-# observe hallucine par lui-meme -- il n'avait pas besoin d'etre prime du tout, mais l'etait
-# quand meme "au cas ou", ce qui a introduit le vrai bug (mot double, "Salut, salut Titou...").
-# On restreint donc le prime aux mots effectivement a risque (courts) au lieu de l'appliquer a
-# l'aveugle a chaque texte -- la grande majorite des phrases (qui ne commencent pas par un mot
-# tres court) ne passeront plus du tout par ce mecanisme, eliminant le risque de mot double pour
-# elles, tout en gardant la protection connue pour les cas ou elle est reellement necessaire.
-_SHORT_WORD_MAX_CHARS = 4
-
-
+# 31 juillet -- retour Tristana (Test 2, "Salut Titu...") : tentative precedente de restreindre
+# le prime aux mots courts (<=4 caracteres), sur l'hypothese que "Salut" (5 caracteres) n'avait
+# jamais besoin d'etre prime. FAUX, verifie par test direct apres coup (/preview-voice + Whisper,
+# reproductible 2 fois de suite) : "Salut Titou, on va jouer au parc." SANS prime (puisque
+# "Salut" > 4 caracteres) fait deraper la prononciation du mot SUIVANT -- "Titou" ressort comme
+# "Pousse", un vrai mot different, pas juste un accent bizarre. Isole seul ("Titou, on va jouer
+# au parc."), "Titou" se prononce impeccablement -- la cause n'est donc pas "Titou" lui-meme,
+# c'est l'absence d'amorce/echauffement avant lui qui laisse le modele "instable" sur le mot
+# suivant, quel qu'il soit. Conclusion : la restriction par longueur du premier mot ciblait le
+# mauvais symptome (elle protegeait le mot prime alors que le risque retombe sur celui d'apres
+# des qu'on ne prime plus). On revient donc a un prime SYSTEMATIQUE (tous les textes), et on
+# traite le vrai probleme residuel (mot d'amorce parfois audible en double quand CosyVoice2 ne
+# laisse aucun silence entre les deux occurrences -- cas "Salut, salut Titou...") autrement :
+# on separe l'amorce du texte reel par un POINT plutot qu'un simple espace ("Salut. Salut Titou,
+# ...") -- un point final est un signal de prosodie beaucoup plus fort pour le modele qu'une
+# simple espace ou une virgule (deja testee, cf plus haut, insuffisante) : il entraine quasi
+# toujours une vraie coupure/pause avant la suite, que _trim_hallucinated_head (fonction ci-
+# dessous, purement basee sur un silence mesure, jamais sur une estimation de duree -- donc ne
+# risque jamais de manger du vrai texte) peut alors detecter et couper proprement. Compromis
+# assume : si un jour CosyVoice2 ignore malgre tout ce point et n'insere toujours aucun silence,
+# le pire residu possible reste un mot repete (audible mais intelligible), jamais un mot
+# corrompu en un autre mot au hasard comme "Titou" -> "Pousse" -- objectivement le risque le
+# moins grave des deux.
 def _prime_text_for_tts(text):
     stripped = (text or "").strip()
     if not stripped:
         return stripped
     first_word = stripped.split(" ", 1)[0]
-    if len(first_word) > _SHORT_WORD_MAX_CHARS:
-        return stripped
-    return f"{first_word} {stripped}"
+    return f"{first_word}. {stripped}"
 
 
 def _normalize_text_for_tts(text):
