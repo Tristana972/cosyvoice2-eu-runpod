@@ -239,21 +239,30 @@ def _trim_primer_head(wav, sr, text):
     de 600ms observee sur "j'ai"). Consequence : _trim_hallucinated_head, qui ne coupe qu'a
     un silence net, ne trouve rien a couper et laisse tout passer tel quel (degradation
     "propre" prevue par ce fix, mais qui restait audible).
-    Repli deterministe : ce fichier utilise deja ailleurs (tete ET queue) la formule
-    n_chars/8.0 + 1.0 comme estimation calibree de la duree de parole pour ce modele. La
-    difference entre la duree REELLE de l'audio synthetise (avec amorce) et cette duree
-    ESTIMEE du texte reel seul (sans amorce) donne une approximation fiable de la duree de
-    l'amorce a retirer -- sans dependre d'un silence. Coupe seulement si l'ecart est
-    plausible pour un seul mot repete (entre 0.15s et 1.5s) ; sinon on ne touche a rien,
-    plutot que de risquer de couper du vrai texte sur une estimation aberrante."""
+    v1 (abandonne) : difference entre la duree REELLE (avec amorce) et une estimation
+    n_chars/8.0+1.0 du texte REEL SEUL -- cette formule est calibree pour estimer une
+    phrase entiere (tete/queue de hallucination), pas assez precise pour en deduire la
+    duree d'UN SEUL mot par difference : sur "Salut Titu, on va jouer au parc ?", mesure
+    en re-testant plusieurs fois, la duree totale REELLE (amorce incluse) tombait deja EN
+    DESSOUS de l'estimation du texte seul -- l'ecart devenait negatif, le repli ne se
+    declenchait donc jamais, et le mot ressortait toujours double sans coupe.
+    v2 (celle-ci) : estimer directement la duree du seul mot d'amorce a partir de sa
+    longueur (independant de la longueur du reste de la phrase, donc plus fiable) --
+    un mot court en francais dure grossierement 90-140ms par caractere a un debit
+    naturel, plus une petite marge pour la coupure/liaison avec la suite. Coupe
+    seulement si cette estimation reste plausible (entre 0.15s et 1.2s) et compatible
+    avec la duree totale disponible ; sinon on ne touche a rien, plutot que de risquer
+    de couper du vrai texte sur une estimation aberrante."""
     stripped = (text or "").strip()
     if not stripped:
         return wav
-    n_chars = max(len(stripped), 1)
-    est_real_seconds = (n_chars / 8.0) + 1.0
+    first_word = stripped.split(" ", 1)[0]
+    n_word_chars = max(len(first_word), 1)
+    primer_seconds = (n_word_chars / 9.0) + 0.2
+    if primer_seconds < 0.15 or primer_seconds > 1.2:
+        return wav
     total_seconds = wav.shape[-1] / sr
-    primer_seconds = total_seconds - est_real_seconds
-    if primer_seconds < 0.15 or primer_seconds > 1.5:
+    if primer_seconds > total_seconds * 0.5:
         return wav
     cut_sample = int(primer_seconds * sr)
     if cut_sample <= 0 or cut_sample >= wav.shape[-1]:
