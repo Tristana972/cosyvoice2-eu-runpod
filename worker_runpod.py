@@ -231,6 +231,41 @@ def _trim_hallucinated_head(wav, sr, text):
     return wav
 
 
+def _trim_primer_head(wav, sr, text):
+    """31 juillet -- retour de Tristana sur le Test 2 (duo) : "salut, salut Titou..." --
+    le mot d'amorce (voir _prime_text_for_tts) ressort audible en double. Cause : sur ce
+    texte, CosyVoice2-EU enchaine les deux "Salut" sans aucun silence entre eux -- ce qui
+    est justement l'effet recherche par le fix "repetition du premier mot" (eviter la pause
+    de 600ms observee sur "j'ai"). Consequence : _trim_hallucinated_head, qui ne coupe qu'a
+    un silence net, ne trouve rien a couper et laisse tout passer tel quel (degradation
+    "propre" prevue par ce fix, mais qui restait audible).
+    Repli deterministe : ce fichier utilise deja ailleurs (tete ET queue) la formule
+    n_chars/8.0 + 1.0 comme estimation calibree de la duree de parole pour ce modele. La
+    difference entre la duree REELLE de l'audio synthetise (avec amorce) et cette duree
+    ESTIMEE du texte reel seul (sans amorce) donne une approximation fiable de la duree de
+    l'amorce a retirer -- sans dependre d'un silence. Coupe seulement si l'ecart est
+    plausible pour un seul mot repete (entre 0.15s et 1.5s) ; sinon on ne touche a rien,
+    plutot que de risquer de couper du vrai texte sur une estimation aberrante."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return wav
+    n_chars = max(len(stripped), 1)
+    est_real_seconds = (n_chars / 8.0) + 1.0
+    total_seconds = wav.shape[-1] / sr
+    primer_seconds = total_seconds - est_real_seconds
+    if primer_seconds < 0.15 or primer_seconds > 1.5:
+        return wav
+    cut_sample = int(primer_seconds * sr)
+    if cut_sample <= 0 or cut_sample >= wav.shape[-1]:
+        return wav
+    fade_samples = min(int(0.05 * sr), cut_sample)
+    wav = wav[..., cut_sample:].clone()
+    if fade_samples > 0:
+        fade = torch.linspace(0.0, 1.0, fade_samples)
+        wav[..., :fade_samples] *= fade
+    return wav
+
+
 def _trim_hallucinated_tail(wav, sr, text):
     """CosyVoice2-EU (zero-shot cloning against a fixed reference voice clip)
     sometimes keeps generating audio well past the end of the real text --
@@ -830,7 +865,10 @@ def generate(job):
                 character = t["character"].strip().lower()
                 turn_text = t["text"]
                 wav, sr = cosy.tts(text=_with_style_prompt(_normalize_text_for_tts(_prime_text_for_tts(turn_text))), prompt=prompt_path)
+                _samples_before_head_trim = wav.shape[-1]
                 wav = _trim_hallucinated_head(wav, sr, turn_text)
+                if wav.shape[-1] == _samples_before_head_trim:
+                    wav = _trim_primer_head(wav, sr, turn_text)
                 wav = _trim_hallucinated_tail(wav, sr, turn_text)
                 wav = _normalize_loudness(wav)
                 turn_audio_path = os.path.join(frames_dir, "turn_%02d.wav" % i)
@@ -865,7 +903,10 @@ def generate(job):
             wav, sr = cosy.tts(text=_with_style_prompt(_normalize_text_for_tts(_prime_text_for_tts(text))), prompt=prompt_path)
         else:
             wav, sr = cosy.tts(text=_with_style_prompt(_normalize_text_for_tts(_prime_text_for_tts(text))), prompt=prompt_path, speed=default_speed)
+        _samples_before_head_trim = wav.shape[-1]
         wav = _trim_hallucinated_head(wav, sr, text)
+        if wav.shape[-1] == _samples_before_head_trim:
+            wav = _trim_primer_head(wav, sr, text)
         wav = _trim_hallucinated_tail(wav, sr, text)
         wav, sr = _pitch_shift_wav(wav, sr, default_pitch_semitones)
         wav = _normalize_loudness(wav)
