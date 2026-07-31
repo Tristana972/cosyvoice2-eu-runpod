@@ -150,11 +150,26 @@ def _normalize_loudness(wav, target_peak=0.95, max_gain=12.0):
 # declencher la meme pause d'intonation. Si jamais _trim_hallucinated_head ne trouve aucune
 # coupure nette (mots identiques adjacents, pas toujours de silence entre eux), on degrade
 # proprement : le mot sort juste repete deux fois, jamais du charabia ni un blanc de 600ms.
+# 31 juillet -- retour Tristana (Test 2, "Salut Titu...") : ce prime etait applique a TOUS les
+# textes, sans exception -- or les 2 SEULS cas confirmes de hallucination en tete ("J'ai une
+# super maman" -> "haaaa", "Oh Dieu que c'est beau" -> "hohoho") sont tous les 2 des mots tres
+# courts (<=4 caracteres avant l'apostrophe/l'espace). "Salut" (5 caracteres) n'a jamais ete
+# observe hallucine par lui-meme -- il n'avait pas besoin d'etre prime du tout, mais l'etait
+# quand meme "au cas ou", ce qui a introduit le vrai bug (mot double, "Salut, salut Titou...").
+# On restreint donc le prime aux mots effectivement a risque (courts) au lieu de l'appliquer a
+# l'aveugle a chaque texte -- la grande majorite des phrases (qui ne commencent pas par un mot
+# tres court) ne passeront plus du tout par ce mecanisme, eliminant le risque de mot double pour
+# elles, tout en gardant la protection connue pour les cas ou elle est reellement necessaire.
+_SHORT_WORD_MAX_CHARS = 4
+
+
 def _prime_text_for_tts(text):
     stripped = (text or "").strip()
     if not stripped:
         return stripped
     first_word = stripped.split(" ", 1)[0]
+    if len(first_word) > _SHORT_WORD_MAX_CHARS:
+        return stripped
     return f"{first_word} {stripped}"
 
 
@@ -687,6 +702,36 @@ def generate(job):
                 image_b64 = base64.b64encode(f.read()).decode("utf-8")
 
             return {"status": "DONE", "image_base64": image_b64, "mode": "crop_to_aspect"}
+
+        # --- trim_video_head: 31 juillet, retour Tristana (frustree, a raison) : le silence de
+        # tete de 350ms qu'on ajoute a l'audio avant WaveSpeedAI (voir plus bas, "lead_pad_samples")
+        # protege bien le premier mot (root cause confirmee), mais laisse un blanc VISIBLE d'environ
+        # 1 seconde en tete de la video finale (350ms de silence + le propre demarrage/"warm-up"
+        # de Wan2.2-S2V) -- disproportionne sur une vidéo de 2 secondes. Plutot que de re-deviner un
+        # nouveau nombre de millisecondes pour le pad (meme piege que le mot en double : une
+        # estimation qu'on ne peut jamais valider qu'apres coup), on change de methode : on garde le
+        # pad (protection connue, fiable), puis on coupe cette meme duree, exactement, en sortie de
+        # video -- une coupe basee sur le TEMPS qu'on a nous-memes injecte, pas une estimation sur le
+        # contenu. Aucune ambiguite possible sur combien couper.
+        if mode == "trim_video_head":
+            video_url = values["video_url"]
+            trim_seconds = float(values.get("trim_seconds", 0.35))
+            video_path = download_file(video_url, ".mp4")
+            out_video_path = "/content/out_trimmed.mp4"
+            subprocess.run(
+                [
+                    "ffmpeg", "-y",
+                    "-ss", str(trim_seconds), "-i", video_path,
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    "-c:a", "aac",
+                    out_video_path,
+                ],
+                check=True,
+            )
+            with open(out_video_path, "rb") as f:
+                video_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+            return {"status": "DONE", "video_base64": video_b64, "mode": "trim_video_head"}
 
         # --- add_music: mixe une musique IA (générée dans l'app, voir /generate-music) sur une
         # vidéo duo déjà recollée (mode "stitch"). Deux placements possibles (choisis par
