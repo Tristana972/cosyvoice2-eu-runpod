@@ -134,17 +134,28 @@ def _normalize_loudness(wav, target_peak=0.95, max_gain=12.0):
 # a reperer et a supprimer. Si jamais la coupe ne se declenche pas (garde-fous trop stricts), on
 # degrade proprement : la phrase sort juste avec un "Alors," en trop au debut, jamais du charabia.
 # 30 juillet (suite) -- retour de Tristana apres le fix silence-de-tete : "j'ai" est bien
-# rendu maintenant, mais il y a un blanc audible juste apres, avant "une super maman" --
-# probablement la virgule de "Alors, " qui donne au modele l'habitude de marquer une pause
-# apres CE type de mot court en debut de phrase, et ce reflexe de pause "baverait" sur "J'ai"
-# qui suit. On retire la virgule (plus de marqueur de pause explicite dans l'amorce) pour voir
-# si ca suffit a fluidifier l'enchainement -- le mot reste assez distinct du texte reel pour
-# que _trim_hallucinated_head trouve toujours une coupure nette a repérer.
-_TTS_PRIMER = "Donc "
-
-
+# rendu maintenant, mais il y a un blanc de 600ms audible juste apres, avant "une super maman".
+# Mesure precise (comparaison audio brut /preview-voice vs video finale, memes timestamps de
+# silence a la milliseconde pres) : le blanc est deja present dans le WAV brut de CosyVoice2-EU,
+# ce n'est donc PAS WaveSpeedAI qui l'introduit. Retirer la virgule de l'amorce ("Alors, " ->
+# "Donc ") n'a rien change -- le blanc n'est donc pas cause par un marqueur de ponctuation.
+# Nouvelle hypothese, plus probable : n'importe quel mot d'amorce SANS RAPPORT avec le texte
+# reel ("Alors"/"Donc") pousse le modele a traiter la suite ("J'ai...") comme le debut d'une
+# NOUVELLE clause a part entiere -- avec la pause d'intonation qu'un vrai debut de clause
+# entrainerait naturellement -- meme sans virgule explicite. Palliatif v2 : au lieu d'un mot de
+# remplissage arbitraire, on repete le PREMIER MOT du texte reel lui-meme comme amorce ("J'ai
+# J'ai une super maman"). Le modele "rate" eventuellement la 1ere occurrence (coupee par
+# _trim_hallucinated_head comme avant), mais la 2e occurrence est alors une simple repetition/
+# continuation du meme mot, pas une nouvelle clause a part entiere -- ne devrait donc pas
+# declencher la meme pause d'intonation. Si jamais _trim_hallucinated_head ne trouve aucune
+# coupure nette (mots identiques adjacents, pas toujours de silence entre eux), on degrade
+# proprement : le mot sort juste repete deux fois, jamais du charabia ni un blanc de 600ms.
 def _prime_text_for_tts(text):
-    return _TTS_PRIMER + (text or "")
+    stripped = (text or "").strip()
+    if not stripped:
+        return stripped
+    first_word = stripped.split(" ", 1)[0]
+    return f"{first_word} {stripped}"
 
 
 def _normalize_text_for_tts(text):
