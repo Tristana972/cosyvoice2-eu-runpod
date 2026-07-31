@@ -133,7 +133,14 @@ def _normalize_loudness(wav, target_peak=0.95, max_gain=12.0):
 # le silence naturel apres la virgule donne enfin a _trim_hallucinated_head une vraie coupure nette
 # a reperer et a supprimer. Si jamais la coupe ne se declenche pas (garde-fous trop stricts), on
 # degrade proprement : la phrase sort juste avec un "Alors," en trop au debut, jamais du charabia.
-_TTS_PRIMER = "Alors, "
+# 30 juillet (suite) -- retour de Tristana apres le fix silence-de-tete : "j'ai" est bien
+# rendu maintenant, mais il y a un blanc audible juste apres, avant "une super maman" --
+# probablement la virgule de "Alors, " qui donne au modele l'habitude de marquer une pause
+# apres CE type de mot court en debut de phrase, et ce reflexe de pause "baverait" sur "J'ai"
+# qui suit. On retire la virgule (plus de marqueur de pause explicite dans l'amorce) pour voir
+# si ca suffit a fluidifier l'enchainement -- le mot reste assez distinct du texte reel pour
+# que _trim_hallucinated_head trouve toujours une coupure nette a repérer.
+_TTS_PRIMER = "Donc "
 
 
 def _prime_text_for_tts(text):
