@@ -874,10 +874,15 @@ def generate(job):
                 character = t["character"].strip().lower()
                 turn_text = t["text"]
                 wav, sr = cosy.tts(text=_with_style_prompt(_normalize_text_for_tts(_prime_text_for_tts(turn_text))), prompt=prompt_path)
-                _samples_before_head_trim = wav.shape[-1]
+                # 31 juillet -- _trim_primer_head (repli deterministe sans silence) DESACTIVE ici :
+                # confirme par Tristana qu'il coupait parfois trop loin et mangeait le debut du
+                # VRAI texte ("Salut Titu..." -> "J'ai une super maman" rendu "J'ai MILLE TUPER
+                # maman"), un defaut bien pire que le mot d'amorce simplement audible en double.
+                # On revient au comportement sur, silence-uniquement (_trim_hallucinated_head) :
+                # ne coupe jamais sans etre sur, quitte a laisser passer le mot double de temps
+                # en temps. Voir _trim_primer_head plus haut si une meilleure calibration (ex.
+                # mesurer l'amorce via un appel TTS separe) est tentee plus tard.
                 wav = _trim_hallucinated_head(wav, sr, turn_text)
-                if wav.shape[-1] == _samples_before_head_trim:
-                    wav = _trim_primer_head(wav, sr, turn_text)
                 wav = _trim_hallucinated_tail(wav, sr, turn_text)
                 wav = _normalize_loudness(wav)
                 turn_audio_path = os.path.join(frames_dir, "turn_%02d.wav" % i)
@@ -912,10 +917,10 @@ def generate(job):
             wav, sr = cosy.tts(text=_with_style_prompt(_normalize_text_for_tts(_prime_text_for_tts(text))), prompt=prompt_path)
         else:
             wav, sr = cosy.tts(text=_with_style_prompt(_normalize_text_for_tts(_prime_text_for_tts(text))), prompt=prompt_path, speed=default_speed)
-        _samples_before_head_trim = wav.shape[-1]
+        # 31 juillet -- _trim_primer_head desactive ici aussi, meme raison que dans la branche
+        # duo ci-dessus (retour Tristana : coupait dans le vrai texte, "une super" rendu
+        # "MILLE TUPER" sur "J'ai une super maman").
         wav = _trim_hallucinated_head(wav, sr, text)
-        if wav.shape[-1] == _samples_before_head_trim:
-            wav = _trim_primer_head(wav, sr, text)
         wav = _trim_hallucinated_tail(wav, sr, text)
         wav, sr = _pitch_shift_wav(wav, sr, default_pitch_semitones)
         wav = _normalize_loudness(wav)
